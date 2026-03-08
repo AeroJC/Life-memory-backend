@@ -2,6 +2,9 @@ import { Router } from 'express'
 import { prisma, formatSpace, formatSpaceWithMemories } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { User } from '../types.js'
+import { Resend } from 'resend'
+
+const resend = new Resend(process.env.RESEND_API_KEY)
 
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 async function generateInviteCode(): Promise<string> {
@@ -179,12 +182,43 @@ router.post('/:id/invite', async (req, res) => {
   }
 
   // Store pending invite — auto-joins when they sign up
+  const space = await prisma.space.findUnique({ where: { id: req.params.id } })
   await prisma.pendingInvite.upsert({
     where: { email_spaceId: { email: normalizedEmail, spaceId: req.params.id } },
     create: { email: normalizedEmail, spaceId: req.params.id, invitedBy: user.id },
     update: { invitedBy: user.id },
   })
-  res.json({ success: true, message: `Invite sent to ${email}. They'll join automatically when they sign up.` })
+
+  const appUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+  const spaceName = space?.title || 'a memory space'
+  const inviteCode = space?.inviteCode || ''
+
+  resend.emails.send({
+    from: 'MemoryWall <onboarding@resend.dev>',
+    to: normalizedEmail,
+    subject: `${user.name} invited you to "${spaceName}" on MemoryWall`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#fffaf6;border-radius:16px;">
+        <h2 style="font-family:Georgia,serif;color:#3d2c1e;margin-bottom:8px;">You're invited! 🌸</h2>
+        <p style="color:#6b5744;font-size:15px;line-height:1.6;">
+          <strong>${user.name}</strong> has invited you to join <strong>"${spaceName}"</strong> on MemoryWall — a place to store and share your most cherished memories.
+        </p>
+        ${inviteCode ? `
+        <div style="background:#fff;border-radius:12px;padding:16px;margin:24px 0;text-align:center;border:1px solid #e8ddd6;">
+          <p style="color:#9b8579;font-size:12px;margin:0 0 8px;">Your invite code</p>
+          <p style="font-family:monospace;font-size:28px;letter-spacing:6px;color:#3d2c1e;margin:0;font-weight:bold;">${inviteCode}</p>
+        </div>` : ''}
+        <a href="${appUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a96e,#e8927c);color:white;text-decoration:none;padding:12px 28px;border-radius:12px;font-size:15px;font-weight:600;margin:8px 0;">
+          Open MemoryWall
+        </a>
+        <p style="color:#9b8579;font-size:13px;margin-top:24px;">
+          Sign up with this email address and you'll be added to the space automatically.
+        </p>
+      </div>
+    `,
+  }).catch((e) => console.error('Email send failed:', e))
+
+  res.json({ success: true, message: `Invite sent to ${email}` })
 })
 
 // PATCH /api/spaces/:id
