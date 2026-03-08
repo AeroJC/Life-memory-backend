@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id
+  name      String
+  email     String   @unique
+  phone     String?
+  avatar    String   @default("")
+  password  String?
+  createdAt DateTime @default(now())
+
+  ownedSpaces  Space[]       @relation("SpaceOwner")
+  memberships  SpaceMember[]
+  joinRequests JoinRequest[]
+  memories     Memory[]
+}
+
+model Space {
+  id          String   @id
+  title       String
+  coverImage  String   @default("")
+  coverEmoji  String   @default("✨")
+  type        String   @default("personal")
+  inviteCode  String?  @unique
+  description String   @default("")
+  createdAt   DateTime @default(now())
+
+  createdById String
+  createdBy      User            @relation("SpaceOwner", fields: [createdById], references: [id])
+  members        SpaceMember[]
+  joinRequests   JoinRequest[]
+  pendingInvites PendingInvite[]
+  memories       Memory[]
+}
+
+model SpaceMember {
+  id       String @id @default(cuid())
+  role     String @default("member")
+  status   String @default("active")
+  joinedAt String
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id])
+  spaceId String
+  space   Space  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spaceId])
+}
+
+model JoinRequest {
+  id          String @id @default(cuid())
+  requestedAt String
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id])
+  spaceId String
+  space   Space  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spaceId])
+}
+
+model PendingInvite {
+  id        String   @id @default(cuid())
+  email     String
+  spaceId   String
+  invitedBy String
+  createdAt DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([email, spaceId])
+}
+
+model Memory {
+  id        String   @id
+  title     String
+  date      String
+  endDate   String?
+  photos    Json     @default("[]")
+  story     String
+  location  String?
+  tags      Json?
+  reactions Json     @default("{}")
+  visibleTo Json?
+  createdAt DateTime @default(now())
+
+  createdById String?
+  createdBy   User?      @relation(fields: [createdById], references: [id])
+  spaceId     String
+  space       Space      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  substories  SubStory[]
+}
+
+model SubStory {
+  id      String  @id
+  date    String
+  type    String  @default("text")
+  title   String?
+  content String?
+  photos  Json?
+  caption String?
+
+  memoryId String
+  memory   Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+}
