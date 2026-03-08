@@ -4,8 +4,6 @@ import { authMiddleware } from '../middleware/auth.js'
 import { User } from '../types.js'
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 async function generateInviteCode(): Promise<string> {
   const existing = await prisma.space.findMany({ where: { inviteCode: { not: null } }, select: { inviteCode: true } })
@@ -193,8 +191,9 @@ router.post('/:id/invite', async (req, res) => {
   const spaceName = space?.title || 'a memory space'
   const inviteCode = space?.inviteCode || ''
 
+  const resend = new Resend(process.env.RESEND_API_KEY)
   resend.emails.send({
-    from: 'MemoryWall <onboarding@resend.dev>',
+    from: 'MemoryWall <noreply@jagadeeshsura.in>',
     to: normalizedEmail,
     subject: `${user.name} invited you to "${spaceName}" on MemoryWall`,
     html: `
