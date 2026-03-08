@@ -55,7 +55,7 @@ export function formatMemory(m: any) {
     reactions: parseJson(m.reactions, {}),
     visibleTo: parseJson(m.visibleTo, undefined),
     createdBy: m.createdById,
-    substories: (m.substories || []).map((s: any) => ({
+    substories: m.substories ? m.substories.map((s: any) => ({
       id: s.id,
       date: s.date,
       type: s.type,
@@ -63,7 +63,7 @@ export function formatMemory(m: any) {
       content: s.content,
       photos: parseJson(s.photos, undefined),
       caption: s.caption,
-    })),
+    })) : undefined,
   }
 }
 
