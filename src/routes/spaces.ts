@@ -6,7 +6,7 @@ import { User } from '../types.js'
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 async function generateInviteCode(): Promise<string> {
   const existing = await prisma.space.findMany({ where: { inviteCode: { not: null } }, select: { inviteCode: true } })
-  const codes = new Set(existing.map((s) => s.inviteCode))
+  const codes = new Set(existing.map((s: { inviteCode: string | null }) => s.inviteCode))
   let code = ''
   do {
     code = ''
@@ -46,7 +46,7 @@ router.get('/:id', async (req, res) => {
   })
   if (!space) { res.status(404).json({ error: 'Space not found' }); return }
 
-  const isMember = space.members.some((m) => m.userId === user.id && m.status === 'active')
+  const isMember = space.members.some((m: any) => m.userId === user.id && m.status === 'active')
   if (!isMember) { res.status(403).json({ error: 'Not a member of this space' }); return }
 
   const formatted = formatSpaceWithMemories(space)
@@ -94,10 +94,10 @@ router.post('/join', async (req, res) => {
     include: { members: true, joinRequests: true },
   })
   if (!space) { res.status(404).json({ error: 'Invalid invite code. Please check and try again.' }); return }
-  if (space.members.some((m) => m.userId === user.id && m.status === 'active')) {
+  if (space.members.some((m: any) => m.userId === user.id && m.status === 'active')) {
     res.status(409).json({ error: 'You are already a member of this space.' }); return
   }
-  if (space.joinRequests.some((r) => r.userId === user.id)) {
+  if (space.joinRequests.some((r: any) => r.userId === user.id)) {
     res.status(409).json({ error: 'You already have a pending request for this space.' }); return
   }
 
