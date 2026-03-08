@@ -15,6 +15,19 @@ async function validateMembership(spaceId: string, userId: string) {
   return true
 }
 
+// GET /api/spaces/:spaceId/memories/:memoryId/substories
+router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
+  const user = (req as any).user as User
+  if (!(await validateMembership(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'Not a member of this space' }); return
+  }
+  const substories = await prisma.subStory.findMany({ where: { memoryId: req.params.memoryId } })
+  res.json(substories.map((s) => ({
+    id: s.id, date: s.date, type: s.type, title: s.title, content: s.content,
+    photos: s.photos ? JSON.parse(s.photos as string) : undefined, caption: s.caption,
+  })))
+})
+
 // POST /api/spaces/:spaceId/memories
 router.post('/:spaceId/memories', async (req, res) => {
   const user = (req as any).user as User
