@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
 import { prisma } from '../db.js'
 import { Resend } from 'resend'
 import { authMiddleware } from '../middleware/auth.js'
@@ -12,6 +13,10 @@ function generateCode(): string {
 
 function codeExpiry(): Date {
   return new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+}
+
+function signToken(userId: string): string {
+  return jwt.sign({ userId }, process.env.JWT_SECRET!, { expiresIn: '30d' })
 }
 
 async function sendVerificationEmail(email: string, name: string, code: string) {
@@ -86,20 +91,12 @@ router.post('/signup', async (req, res) => {
     },
   })
   await sendVerificationEmail(user.email, user.name, code)
-  res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: false }, token: user.id })
+  res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: false }, token: signToken(user.id) })
 })
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
-  const { id, email, phone, password } = req.body
-
-  // Quick login by id (session restore)
-  if (id) {
-    const user = await prisma.user.findUnique({ where: { id } })
-    if (!user) { res.status(404).json({ error: 'User not found' }); return }
-    res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified }, token: user.id })
-    return
-  }
+  const { email, phone, password } = req.body
 
   // Email + password login
   if (email) {
@@ -121,10 +118,10 @@ router.post('/login', async (req, res) => {
         data: { verificationCode: code, verificationCodeExpiry: codeExpiry() },
       })
       await sendVerificationEmail(user.email, user.name, code)
-      res.status(403).json({ error: 'Email not verified', emailNotVerified: true, userId: user.id, token: user.id })
+      res.status(403).json({ error: 'Email not verified', emailNotVerified: true, userId: user.id, token: signToken(user.id) })
       return
     }
-    res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: true }, token: user.id })
+    res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: true }, token: signToken(user.id) })
     return
   }
 
@@ -132,11 +129,17 @@ router.post('/login', async (req, res) => {
   if (phone) {
     const user = await prisma.user.findFirst({ where: { phone } })
     if (!user) { res.status(401).json({ error: 'No account found with this phone number' }); return }
-    res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified }, token: user.id })
+    res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified }, token: signToken(user.id) })
     return
   }
 
   res.status(400).json({ error: 'Email or phone required' })
+})
+
+// GET /api/auth/me — session restore
+router.get('/me', authMiddleware, async (req, res) => {
+  const user = (req as any).user
+  res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified } })
 })
 
 // POST /api/auth/send-verification
@@ -161,7 +164,7 @@ router.post('/verify-email', async (req, res) => {
   if (!userId || !code) { res.status(400).json({ error: 'userId and code are required' }); return }
   const user = await prisma.user.findUnique({ where: { id: userId } })
   if (!user) { res.status(404).json({ error: 'User not found' }); return }
-  if (user.emailVerified) { res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: true }, token: user.id }); return }
+  if (user.emailVerified) { res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: true }, token: signToken(user.id) }); return }
   if (user.verificationCode !== code.trim()) {
     res.status(400).json({ error: 'Invalid verification code' }); return
   }
@@ -172,7 +175,7 @@ router.post('/verify-email', async (req, res) => {
     where: { id: userId },
     data: { emailVerified: true, verificationCode: null, verificationCodeExpiry: null },
   })
-  res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: true }, token: user.id })
+  res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: true }, token: signToken(user.id) })
 })
 
 // POST /api/auth/forgot-password
@@ -231,8 +234,8 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   res.json({ success: true })
 })
 
-// GET /api/auth/users
-router.get('/users', async (_req, res) => {
+// GET /api/auth/users (requires auth)
+router.get('/users', authMiddleware, async (_req, res) => {
   const users = await prisma.user.findMany({ orderBy: { id: 'asc' } })
   res.json(users)
 })

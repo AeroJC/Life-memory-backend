@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import rateLimit from 'express-rate-limit'
 import { prisma } from './db.js'
 import authRoutes from './routes/auth.js'
 import spaceRoutes from './routes/spaces.js'
@@ -20,7 +21,27 @@ app.use(cors({
   },
   credentials: true,
 }))
-app.use(express.json())
+app.use(express.json({ limit: '2mb' }))
+
+// Rate limiting
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: { error: 'Too many attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+const verifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many verification attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+app.use('/api/auth/login', loginLimiter)
+app.use('/api/auth/signup', loginLimiter)
+app.use('/api/auth/forgot-password', loginLimiter)
+app.use('/api/auth/verify-email', verifyLimiter)
 
 // Routes
 app.use('/api/auth', authRoutes)
