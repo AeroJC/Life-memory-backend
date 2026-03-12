@@ -26,6 +26,7 @@ export function formatSpace(space: any) {
       name: m.user?.name || m.name || '',
       role: m.role,
       status: m.status,
+      permission: m.permission ?? 'edit',
       joinedAt: m.joinedAt,
     })),
     joinRequests: (space.joinRequests || []).map((r: any) => ({

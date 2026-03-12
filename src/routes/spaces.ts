@@ -7,13 +7,11 @@ import { deleteCloudinaryImages } from '../cloudinary.js'
 
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 async function generateInviteCode(): Promise<string> {
-  const existing = await prisma.space.findMany({ where: { inviteCode: { not: null } }, select: { inviteCode: true } })
-  const codes = new Set(existing.map((s: { inviteCode: string | null }) => s.inviteCode))
   let code = ''
   do {
     code = ''
     for (let i = 0; i < 6; i++) code += INVITE_CHARS[Math.floor(Math.random() * INVITE_CHARS.length)]
-  } while (codes.has(code))
+  } while (await prisma.space.findFirst({ where: { inviteCode: code } }))
   return code
 }
 
@@ -182,8 +180,8 @@ router.post('/:id/invite', async (req, res) => {
   }
 
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
-  if (!myMember || (myMember.role !== 'owner' && myMember.role !== 'admin')) {
-    res.status(403).json({ error: 'Only owner or admin can invite members' }); return
+  if (!myMember || myMember.status !== 'active') {
+    res.status(403).json({ error: 'Only active members can invite others' }); return
   }
 
   const spaceCheck = await prisma.space.findUnique({ where: { id: req.params.id }, select: { type: true } })
@@ -251,12 +249,14 @@ router.post('/:id/accept-invite', async (req, res) => {
     where: { email_spaceId: { email: user.email, spaceId: req.params.id } },
   })
   if (!invite) { res.status(404).json({ error: 'Invite not found' }); return }
-  await prisma.spaceMember.upsert({
-    where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } },
-    create: { userId: user.id, spaceId: req.params.id, role: 'member', status: 'active', joinedAt: new Date().toISOString().split('T')[0] },
-    update: { status: 'active' },
-  })
-  await prisma.pendingInvite.delete({ where: { email_spaceId: { email: user.email, spaceId: req.params.id } } })
+  await prisma.$transaction([
+    prisma.spaceMember.upsert({
+      where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } },
+      create: { userId: user.id, spaceId: req.params.id, role: 'member', status: 'active', joinedAt: new Date().toISOString().split('T')[0] },
+      update: { status: 'active' },
+    }),
+    prisma.pendingInvite.delete({ where: { email_spaceId: { email: user.email, spaceId: req.params.id } } }),
+  ])
   res.json({ success: true })
 })
 
@@ -322,10 +322,10 @@ router.delete('/:id', async (req, res) => {
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') { res.status(403).json({ error: 'Only the owner can delete this space' }); return }
 
-  // Collect all photo URLs before deleting
+  // Collect all photo URLs before deleting (select only photos fields to avoid fetching full records)
   const memories = await prisma.memory.findMany({
     where: { spaceId: req.params.id },
-    include: { substories: true },
+    select: { photos: true, substories: { select: { photos: true } } },
   })
   const allPhotoUrls: string[] = []
   for (const memory of memories) {
@@ -376,13 +376,22 @@ router.patch('/:id/members/:userId', async (req, res) => {
   const user = (req as any).user as User
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') {
-    res.status(403).json({ error: 'Only owner can change roles' }); return
+    res.status(403).json({ error: 'Only owner can change member settings' }); return
   }
 
-  const { role } = req.body
+  const { role, permission } = req.body
+  const data: any = {}
+  if (role !== undefined) data.role = role
+  if (permission !== undefined) {
+    if (permission !== 'view' && permission !== 'edit') {
+      res.status(400).json({ error: 'Permission must be "view" or "edit"' }); return
+    }
+    data.permission = permission
+  }
+
   const updated = await prisma.spaceMember.update({
     where: { userId_spaceId: { userId: req.params.userId, spaceId: req.params.id } },
-    data: { role },
+    data,
   })
   res.json({ success: true, member: updated })
 })
