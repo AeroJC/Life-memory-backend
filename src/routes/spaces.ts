@@ -86,13 +86,14 @@ router.get('/:id', async (req, res) => {
 // POST /api/spaces
 router.post('/', async (req, res) => {
   const user = (req as any).user as User
-  const { title, coverEmoji, coverIcon, coverColor, type, description } = req.body
+  const { title, coverEmoji, coverIcon, coverColor, coverImage, type, description } = req.body
   if (!title?.trim()) { res.status(400).json({ error: 'Title is required' }); return }
 
   const space = await prisma.space.create({
     data: {
       id: `space-${Date.now()}`,
       title: title.trim(),
+      coverImage: coverImage || '',
       coverEmoji: coverEmoji || '✨',
       coverIcon: coverIcon || '',
       coverColor: coverColor || '',
@@ -212,29 +213,33 @@ router.post('/:id/invite', async (req, res) => {
   const appUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
   const spaceName = space?.title || 'a memory space'
 
-  const resend = new Resend(process.env.RESEND_API_KEY)
-  resend.emails.send({
-    from: 'My Inner Circle <noreply@jagadeeshsura.in>',
-    to: normalizedEmail,
-    subject: `${user.name} invited you to join "${spaceName}" on My Inner Circle`,
-    html: `
-      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#fffaf6;border-radius:16px;">
-        <h2 style="font-family:Georgia,serif;color:#3d2c1e;margin-bottom:8px;">You have an invitation 🌸</h2>
-        <p style="color:#6b5744;font-size:15px;line-height:1.6;">
-          <strong>${user.name}</strong> has invited you to join <strong>"${spaceName}"</strong> on My Inner Circle — a private place to store and share your most cherished memories.
-        </p>
-        <p style="color:#6b5744;font-size:15px;line-height:1.6;">
-          Sign in to My Inner Circle to accept or decline this invitation.
-        </p>
-        <a href="${appUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a96e,#e8927c);color:white;text-decoration:none;padding:12px 28px;border-radius:12px;font-size:15px;font-weight:600;margin:16px 0;">
-          Open My Inner Circle
-        </a>
-        <p style="color:#9b8579;font-size:13px;margin-top:24px;">
-          If you don't have an account yet, sign up with this email address to see the invitation.
-        </p>
-      </div>
-    `,
-  }).catch((e) => console.error('Email send failed:', e))
+  if (process.env.RESEND_API_KEY) {
+    const resend = new Resend(process.env.RESEND_API_KEY)
+    resend.emails.send({
+      from: 'My Inner Circle <noreply@jagadeeshsura.in>',
+      to: normalizedEmail,
+      subject: `${user.name} invited you to join "${spaceName}" on My Inner Circle`,
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#fffaf6;border-radius:16px;">
+          <h2 style="font-family:Georgia,serif;color:#3d2c1e;margin-bottom:8px;">You have an invitation 🌸</h2>
+          <p style="color:#6b5744;font-size:15px;line-height:1.6;">
+            <strong>${user.name}</strong> has invited you to join <strong>"${spaceName}"</strong> on My Inner Circle — a private place to store and share your most cherished memories.
+          </p>
+          <p style="color:#6b5744;font-size:15px;line-height:1.6;">
+            Sign in to My Inner Circle to accept or decline this invitation.
+          </p>
+          <a href="${appUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a96e,#e8927c);color:white;text-decoration:none;padding:12px 28px;border-radius:12px;font-size:15px;font-weight:600;margin:16px 0;">
+            Open My Inner Circle
+          </a>
+          <p style="color:#9b8579;font-size:13px;margin-top:24px;">
+            If you don't have an account yet, sign up with this email address to see the invitation.
+          </p>
+        </div>
+      `,
+    }).catch((e) => console.error('Email send failed:', e))
+  } else {
+    console.log(`Skipping invite email to ${normalizedEmail} (RESEND_API_KEY not configured)`)
+  }
 
   res.json({ success: true, message: `Invitation sent to ${email}` })
 })
@@ -298,9 +303,10 @@ router.patch('/:id', async (req, res) => {
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') { res.status(403).json({ error: 'Only the owner can edit this space' }); return }
 
-  const { title, coverEmoji, coverIcon, coverColor, description } = req.body
+  const { title, coverEmoji, coverIcon, coverColor, coverImage, description } = req.body
   const data: any = {}
   if (title !== undefined) data.title = title.trim()
+  if (coverImage !== undefined) data.coverImage = coverImage
   if (coverEmoji !== undefined) data.coverEmoji = coverEmoji
   if (coverIcon !== undefined) data.coverIcon = coverIcon
   if (coverColor !== undefined) data.coverColor = coverColor
