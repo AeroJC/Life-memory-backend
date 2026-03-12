@@ -3,6 +3,7 @@ import { prisma, formatSpace, formatSpaceWithMemories } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { User } from '../types.js'
 import { Resend } from 'resend'
+import { deleteCloudinaryImages } from '../cloudinary.js'
 
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 async function generateInviteCode(): Promise<string> {
@@ -39,8 +40,8 @@ router.get('/', async (req, res) => {
 router.get('/my-invites', async (req, res) => {
   const user = (req as any).user as User
   const invites = await prisma.pendingInvite.findMany({
-    where: { email: user.email },
-    include: { space: { select: { title: true, coverEmoji: true } } },
+    where: { email: user.email, status: 'pending' },
+    include: { space: { select: { title: true, coverEmoji: true, coverIcon: true } } },
     orderBy: { createdAt: 'desc' },
   })
   const invitedByIds = [...new Set(invites.map((i) => i.invitedBy))]
@@ -51,6 +52,7 @@ router.get('/my-invites', async (req, res) => {
     spaceId: i.spaceId,
     spaceName: i.space.title,
     spaceEmoji: i.space.coverEmoji,
+    spaceIcon: i.space.coverIcon || undefined,
     invitedBy: inviterMap[i.invitedBy] || 'Someone',
     status: i.status,
     createdAt: i.createdAt,
@@ -84,17 +86,17 @@ router.get('/:id', async (req, res) => {
 // POST /api/spaces
 router.post('/', async (req, res) => {
   const user = (req as any).user as User
-  const { title, coverEmoji, type, description } = req.body
+  const { title, coverEmoji, coverIcon, coverColor, type, description } = req.body
   if (!title?.trim()) { res.status(400).json({ error: 'Title is required' }); return }
 
-  const inviteCode = type === 'group' ? await generateInviteCode() : undefined
   const space = await prisma.space.create({
     data: {
       id: `space-${Date.now()}`,
       title: title.trim(),
       coverEmoji: coverEmoji || '✨',
+      coverIcon: coverIcon || '',
+      coverColor: coverColor || '',
       type: type || 'personal',
-      inviteCode,
       description: description || '',
       createdById: user.id,
       members: {
@@ -174,8 +176,8 @@ router.post('/:id/invite', async (req, res) => {
   const user = (req as any).user as User
   const { email } = req.body
 
-  if (!email?.trim() || !email.includes('@')) {
-    res.status(400).json({ error: 'Valid email is required' }); return
+  if (!email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())) {
+    res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com)' }); return
   }
 
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
@@ -183,9 +185,14 @@ router.post('/:id/invite', async (req, res) => {
     res.status(403).json({ error: 'Only owner or admin can invite members' }); return
   }
 
+  const spaceCheck = await prisma.space.findUnique({ where: { id: req.params.id }, select: { type: true } })
+  if (spaceCheck?.type === 'personal') {
+    res.status(400).json({ error: 'Invitations are not available for personal spaces' }); return
+  }
+
   const normalizedEmail = email.toLowerCase().trim()
 
-  // Check if the user is already a member
+  // Check if already an active member
   const invitedUser = await prisma.user.findUnique({ where: { email: normalizedEmail } })
   if (invitedUser) {
     const existing = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: invitedUser.id, spaceId: req.params.id } } })
@@ -194,40 +201,37 @@ router.post('/:id/invite', async (req, res) => {
     }
   }
 
-  // Store pending invite — auto-joins when they sign up
+  // Always create a PendingInvite — user must accept/reject from the app
   const space = await prisma.space.findUnique({ where: { id: req.params.id } })
   await prisma.pendingInvite.upsert({
     where: { email_spaceId: { email: normalizedEmail, spaceId: req.params.id } },
     create: { email: normalizedEmail, spaceId: req.params.id, invitedBy: user.id },
-    update: { invitedBy: user.id },
+    update: { invitedBy: user.id, status: 'pending' },
   })
 
   const appUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
   const spaceName = space?.title || 'a memory space'
-  const inviteCode = space?.inviteCode || ''
 
   if (process.env.RESEND_API_KEY) {
     const resend = new Resend(process.env.RESEND_API_KEY)
     resend.emails.send({
-      from: 'MemoryWall <noreply@jagadeeshsura.in>',
+      from: 'My Inner Circle <noreply@jagadeeshsura.in>',
       to: normalizedEmail,
-      subject: `${user.name} invited you to "${spaceName}" on MemoryWall`,
+      subject: `${user.name} invited you to join "${spaceName}" on My Inner Circle`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#fffaf6;border-radius:16px;">
-          <h2 style="font-family:Georgia,serif;color:#3d2c1e;margin-bottom:8px;">You're invited! 🌸</h2>
+          <h2 style="font-family:Georgia,serif;color:#3d2c1e;margin-bottom:8px;">You have an invitation 🌸</h2>
           <p style="color:#6b5744;font-size:15px;line-height:1.6;">
-            <strong>${user.name}</strong> has invited you to join <strong>"${spaceName}"</strong> on MemoryWall — a place to store and share your most cherished memories.
+            <strong>${user.name}</strong> has invited you to join <strong>"${spaceName}"</strong> on My Inner Circle — a private place to store and share your most cherished memories.
           </p>
-          ${inviteCode ? `
-          <div style="background:#fff;border-radius:12px;padding:16px;margin:24px 0;text-align:center;border:1px solid #e8ddd6;">
-            <p style="color:#9b8579;font-size:12px;margin:0 0 8px;">Your invite code</p>
-            <p style="font-family:monospace;font-size:28px;letter-spacing:6px;color:#3d2c1e;margin:0;font-weight:bold;">${inviteCode}</p>
-          </div>` : ''}
-          <a href="${appUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a96e,#e8927c);color:white;text-decoration:none;padding:12px 28px;border-radius:12px;font-size:15px;font-weight:600;margin:8px 0;">
-            Open MemoryWall
+          <p style="color:#6b5744;font-size:15px;line-height:1.6;">
+            Sign in to My Inner Circle to accept or decline this invitation.
+          </p>
+          <a href="${appUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a96e,#e8927c);color:white;text-decoration:none;padding:12px 28px;border-radius:12px;font-size:15px;font-weight:600;margin:16px 0;">
+            Open My Inner Circle
           </a>
           <p style="color:#9b8579;font-size:13px;margin-top:24px;">
-            Sign up with this email address and you'll be added to the space automatically.
+            If you don't have an account yet, sign up with this email address to see the invitation.
           </p>
         </div>
       `,
@@ -236,7 +240,7 @@ router.post('/:id/invite', async (req, res) => {
     console.log(`Skipping invite email to ${normalizedEmail} (RESEND_API_KEY not configured)`)
   }
 
-  res.json({ success: true, message: `Invite sent to ${email}` })
+  res.json({ success: true, message: `Invitation sent to ${email}` })
 })
 
 // POST /api/spaces/:id/accept-invite
@@ -298,10 +302,12 @@ router.patch('/:id', async (req, res) => {
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') { res.status(403).json({ error: 'Only the owner can edit this space' }); return }
 
-  const { title, coverEmoji, description } = req.body
+  const { title, coverEmoji, coverIcon, coverColor, description } = req.body
   const data: any = {}
   if (title !== undefined) data.title = title.trim()
   if (coverEmoji !== undefined) data.coverEmoji = coverEmoji
+  if (coverIcon !== undefined) data.coverIcon = coverIcon
+  if (coverColor !== undefined) data.coverColor = coverColor
   if (description !== undefined) data.description = description
 
   const space = await prisma.space.update({ where: { id: req.params.id }, data, include: spaceIncludes })
@@ -314,7 +320,38 @@ router.delete('/:id', async (req, res) => {
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') { res.status(403).json({ error: 'Only the owner can delete this space' }); return }
 
+  // Collect all photo URLs before deleting
+  const memories = await prisma.memory.findMany({
+    where: { spaceId: req.params.id },
+    include: { substories: true },
+  })
+  const allPhotoUrls: string[] = []
+  for (const memory of memories) {
+    const memPhotos: string[] = memory.photos ? JSON.parse(memory.photos as string) : []
+    allPhotoUrls.push(...memPhotos)
+    for (const sub of memory.substories) {
+      if (sub.photos) {
+        const subPhotos: string[] = JSON.parse(sub.photos as string)
+        allPhotoUrls.push(...subPhotos)
+      }
+    }
+  }
+
+  // Delete space from DB (cascades to memories, substories, members, invites)
   await prisma.space.delete({ where: { id: req.params.id } })
+
+  // Respond immediately — clean up Cloudinary in background
+  res.json({ success: true })
+  if (allPhotoUrls.length > 0) deleteCloudinaryImages(allPhotoUrls).catch(() => {})
+})
+
+// POST /api/spaces/:id/leave  (any member can leave, except owner)
+router.post('/:id/leave', async (req, res) => {
+  const user = (req as any).user as User
+  const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
+  if (!myMember) { res.status(404).json({ error: 'You are not a member of this space' }); return }
+  if (myMember.role === 'owner') { res.status(403).json({ error: 'The owner cannot leave. Transfer ownership or delete the space.' }); return }
+  await prisma.spaceMember.delete({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   res.json({ success: true })
 })
 
@@ -325,6 +362,8 @@ router.delete('/:id/members/:userId', async (req, res) => {
   if (!myMember || (myMember.role !== 'owner' && myMember.role !== 'admin')) {
     res.status(403).json({ error: 'Only owner or admin can remove members' }); return
   }
+  const targetMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: req.params.userId, spaceId: req.params.id } } })
+  if (targetMember?.role === 'owner') { res.status(403).json({ error: 'Cannot remove the owner' }); return }
 
   await prisma.spaceMember.deleteMany({ where: { userId: req.params.userId, spaceId: req.params.id } })
   res.json({ success: true })
