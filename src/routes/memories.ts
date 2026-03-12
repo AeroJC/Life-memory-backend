@@ -15,6 +15,16 @@ async function validateMembership(spaceId: string, userId: string) {
   return true
 }
 
+async function validateEditPermission(spaceId: string, userId: string) {
+  const member = await prisma.spaceMember.findUnique({
+    where: { userId_spaceId: { userId, spaceId } },
+  })
+  if (!member || member.status !== 'active') return false
+  // owner always has edit access; others need permission === 'edit'
+  if (member.role === 'owner') return true
+  return (member.permission ?? 'edit') === 'edit'
+}
+
 // GET /api/spaces/:spaceId/memories/:memoryId/substories
 router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
   const user = (req as any).user as User
@@ -31,8 +41,8 @@ router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
 // POST /api/spaces/:spaceId/memories
 router.post('/:spaceId/memories', async (req, res) => {
   const user = (req as any).user as User
-  if (!(await validateMembership(req.params.spaceId, user.id))) {
-    res.status(403).json({ error: 'Not a member of this space' }); return
+  if (!(await validateEditPermission(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
   const { title, date, story, location, tags, photos, endDate, visibleTo } = req.body
@@ -64,8 +74,17 @@ router.post('/:spaceId/memories', async (req, res) => {
 // PUT /api/spaces/:spaceId/memories/:memoryId
 router.put('/:spaceId/memories/:memoryId', async (req, res) => {
   const user = (req as any).user as User
-  if (!(await validateMembership(req.params.spaceId, user.id))) {
-    res.status(403).json({ error: 'Not a member of this space' }); return
+  if (!(await validateEditPermission(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'You have view-only access to this space' }); return
+  }
+
+  // Only the creator or an owner/admin can edit a memory
+  const existingForAuth = await prisma.memory.findUnique({ where: { id: req.params.memoryId }, select: { createdById: true } })
+  if (existingForAuth && existingForAuth.createdById !== user.id) {
+    const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.spaceId } } })
+    if (myMember?.role !== 'owner' && myMember?.role !== 'admin') {
+      res.status(403).json({ error: 'You can only edit your own memories' }); return
+    }
   }
 
   const { title, date, story, location, tags, photos, endDate, visibleTo } = req.body
@@ -101,8 +120,17 @@ router.put('/:spaceId/memories/:memoryId', async (req, res) => {
 // DELETE /api/spaces/:spaceId/memories/:memoryId
 router.delete('/:spaceId/memories/:memoryId', async (req, res) => {
   const user = (req as any).user as User
-  if (!(await validateMembership(req.params.spaceId, user.id))) {
-    res.status(403).json({ error: 'Not a member of this space' }); return
+  if (!(await validateEditPermission(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'You have view-only access to this space' }); return
+  }
+
+  // Only the creator or an owner/admin can delete a memory
+  const memForAuth = await prisma.memory.findUnique({ where: { id: req.params.memoryId }, select: { createdById: true } })
+  if (memForAuth && memForAuth.createdById !== user.id) {
+    const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.spaceId } } })
+    if (myMember?.role !== 'owner' && myMember?.role !== 'admin') {
+      res.status(403).json({ error: 'You can only delete your own memories' }); return
+    }
   }
 
   // Collect all photos before deleting
@@ -137,27 +165,33 @@ router.post('/:spaceId/memories/:memoryId/react', async (req, res) => {
   const { emoji } = req.body
   if (!emoji) { res.status(400).json({ error: 'Emoji is required' }); return }
 
-  const memory = await prisma.memory.findUnique({ where: { id: req.params.memoryId } })
-  if (!memory) { res.status(404).json({ error: 'Memory not found' }); return }
-
-  const reactions: Record<string, number> = typeof memory.reactions === 'string'
-    ? JSON.parse(memory.reactions)
-    : (memory.reactions as any) || {}
-  reactions[emoji] = (reactions[emoji] || 0) + 1
-
-  await prisma.memory.update({
-    where: { id: req.params.memoryId },
-    data: { reactions: JSON.stringify(reactions) },
+  // Use a transaction with row-level lock to prevent race conditions
+  const updated = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ reactions: string }>>`
+      SELECT reactions FROM "Memory" WHERE id = ${req.params.memoryId} FOR UPDATE
+    `
+    if (!rows[0]) return null
+    const reactions: Record<string, number> = (() => {
+      try { return JSON.parse(rows[0].reactions as string) } catch { return {} }
+    })()
+    reactions[emoji] = (reactions[emoji] || 0) + 1
+    return tx.memory.update({
+      where: { id: req.params.memoryId },
+      data: { reactions: JSON.stringify(reactions) },
+      select: { reactions: true },
+    })
   })
 
+  if (!updated) { res.status(404).json({ error: 'Memory not found' }); return }
+  const reactions = typeof updated.reactions === 'string' ? JSON.parse(updated.reactions) : updated.reactions
   res.json({ reactions })
 })
 
 // POST /api/spaces/:spaceId/memories/:memoryId/substories
 router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
   const user = (req as any).user as User
-  if (!(await validateMembership(req.params.spaceId, user.id))) {
-    res.status(403).json({ error: 'Not a member of this space' }); return
+  if (!(await validateEditPermission(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
   const { date, type, title, content, caption, photos } = req.body
@@ -189,8 +223,8 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
 // PUT /api/spaces/:spaceId/memories/:memoryId/substories/:substoryId
 router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, res) => {
   const user = (req as any).user as User
-  if (!(await validateMembership(req.params.spaceId, user.id))) {
-    res.status(403).json({ error: 'Not a member of this space' }); return
+  if (!(await validateEditPermission(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
   const { type, title, content, caption, photos } = req.body
@@ -232,8 +266,8 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, re
 // DELETE /api/spaces/:spaceId/memories/:memoryId/substories/:substoryId
 router.delete('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, res) => {
   const user = (req as any).user as User
-  if (!(await validateMembership(req.params.spaceId, user.id))) {
-    res.status(403).json({ error: 'Not a member of this space' }); return
+  if (!(await validateEditPermission(req.params.spaceId, user.id))) {
+    res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
   const substory = await prisma.subStory.findUnique({ where: { id: req.params.substoryId } })
   if (substory?.photos) {

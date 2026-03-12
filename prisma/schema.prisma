@@ -49,10 +49,11 @@ model Space {
 }
 
 model SpaceMember {
-  id       String @id @default(cuid())
-  role     String @default("member")
-  status   String @default("active")
-  joinedAt String
+  id         String @id @default(cuid())
+  role       String @default("member")
+  status     String @default("active")
+  permission String @default("edit")
+  joinedAt   String
 
   userId  String
   user    User   @relation(fields: [userId], references: [id])

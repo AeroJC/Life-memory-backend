@@ -287,7 +287,10 @@ router.post('/change-password', authMiddleware, async (req, res) => {
 
 // GET /api/auth/users (requires auth)
 router.get('/users', authMiddleware, async (_req, res) => {
-  const users = await prisma.user.findMany({ orderBy: { id: 'asc' } })
+  const users = await prisma.user.findMany({
+    orderBy: { id: 'asc' },
+    select: { id: true, name: true, email: true, avatar: true },
+  })
   res.json(users)
 })
 
