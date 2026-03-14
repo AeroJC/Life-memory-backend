@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { prisma } from '../db.js'
 import { Resend } from 'resend'
-import { authMiddleware } from '../middleware/auth.js'
+import { authMiddleware, invalidateUserCache } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -282,6 +282,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   if (!valid) { res.status(401).json({ error: 'Current password is incorrect' }); return }
   const hashed = await bcrypt.hash(newPassword, 10)
   await prisma.user.update({ where: { id: user.id }, data: { password: hashed } })
+  invalidateUserCache(user.id)
   res.json({ success: true })
 })
 
@@ -297,6 +298,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
     where: { id: user.id },
     data: { name: name.trim() },
   })
+  invalidateUserCache(user.id)
   res.json({ success: true, user: { id: updated.id, name: updated.name, email: updated.email, avatar: updated.avatar, phone: updated.phone, emailVerified: updated.emailVerified } })
 })
 

@@ -61,6 +61,8 @@ model SpaceMember {
   space   Space  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
   @@unique([userId, spaceId])
+  @@index([userId])
+  @@index([spaceId])
 }
 
 model JoinRequest {
@@ -73,6 +75,8 @@ model JoinRequest {
   space   Space  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
   @@unique([userId, spaceId])
+  @@index([userId])
+  @@index([spaceId])
 }
 
 model PendingInvite {
@@ -86,6 +90,8 @@ model PendingInvite {
   space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
   @@unique([email, spaceId])
+  @@index([email])
+  @@index([spaceId])
 }
 
 model Memory {
@@ -106,6 +112,9 @@ model Memory {
   spaceId     String
   space       Space      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   substories  SubStory[]
+
+  @@index([spaceId])
+  @@index([createdById])
 }
 
 model SubStory {
@@ -119,4 +128,6 @@ model SubStory {
 
   memoryId String
   memory   Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId])
 }

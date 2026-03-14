@@ -50,6 +50,19 @@ router.post('/:spaceId/memories', async (req, res) => {
     res.status(400).json({ error: 'Title and story are required' }); return
   }
 
+  // Validate photo URLs
+  if (photos && Array.isArray(photos)) {
+    const maxPhotos = 20
+    if (photos.length > maxPhotos) {
+      res.status(400).json({ error: `Maximum ${maxPhotos} photos per memory` }); return
+    }
+    for (const url of photos) {
+      if (typeof url !== 'string' || url.length > 500) {
+        res.status(400).json({ error: 'Invalid photo URL' }); return
+      }
+    }
+  }
+
   const memory = await prisma.memory.create({
     data: {
       id: `m-${Date.now()}`,

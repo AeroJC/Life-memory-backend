@@ -4,19 +4,21 @@ import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import { prisma } from './db.js'
+import { logger, generateRequestId } from './logger.js'
 import authRoutes from './routes/auth.js'
 import spaceRoutes from './routes/spaces.js'
 import memoryRoutes from './routes/memories.js'
+import { sanitizeBody } from './middleware/sanitize.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
 
 // Prevent process crashes from unhandled errors
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught exception (server kept alive):', err.message)
+  logger.error('Uncaught exception', { error: err.message })
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled rejection (server kept alive):', reason)
+  logger.error('Unhandled rejection', { reason: String(reason) })
 })
 
 const allowedOrigins = [
@@ -35,6 +37,28 @@ app.use(cors({
 }))
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
 app.use(express.json({ limit: '2mb' }))
+
+// Sanitize request bodies — skip rich text fields that contain intentional HTML
+app.use(sanitizeBody(new Set(['story', 'content', 'caption'])))
+
+// Request ID + logging
+app.use((req, res, next) => {
+  const requestId = (req.headers['x-request-id'] as string) || generateRequestId()
+  ;(req as any).requestId = requestId
+  res.setHeader('x-request-id', requestId)
+
+  const start = Date.now()
+  res.on('finish', () => {
+    logger.info('request', {
+      requestId,
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      duration: Date.now() - start,
+    })
+  })
+  next()
+})
 
 // Rate limiting
 const loginLimiter = rateLimit({
@@ -58,9 +82,16 @@ const actionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 })
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { error: 'Too many signup attempts. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
 
 app.use('/api/auth/login', loginLimiter)
-app.use('/api/auth/pre-signup', loginLimiter)
+app.use('/api/auth/pre-signup', signupLimiter)
 app.use('/api/auth/complete-signup', loginLimiter)
 app.use('/api/auth/forgot-password', loginLimiter)
 app.use('/api/auth/verify-email', verifyLimiter)
@@ -79,7 +110,7 @@ function wrapRouter(router: any) {
             const result = original(req, res, next)
             if (result && typeof result.catch === 'function') {
               result.catch((err: Error) => {
-                console.error(`Route error [${req.method} ${req.originalUrl}]:`, err.message)
+                logger.error('Route error', { method: req.method, path: req.originalUrl, error: err.message, stack: err.stack })
                 if (!res.headersSent) {
                   res.status(500).json({ error: 'Internal server error' })
                 }
@@ -111,11 +142,11 @@ app.get('/api/health', async (_req, res) => {
 // Global error handler — must be last middleware
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Unhandled error:', err)
+  logger.error('Unhandled error', { error: err.message, stack: err.stack })
   res.status(500).json({ error: 'Internal server error' })
 })
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`)
-  console.log('Database: PostgreSQL (Neon)')
+  logger.info('Server started', { port: PORT })
+  logger.info('Database: PostgreSQL (Neon)')
 })

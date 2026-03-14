@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { prisma, formatSpace, formatSpaceWithMemories } from '../db.js'
+import { prisma, formatSpace, formatSpaceWithMemories, formatMemory } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { User } from '../types.js'
 import { Resend } from 'resend'
@@ -10,7 +10,7 @@ async function generateInviteCode(): Promise<string> {
   let code = ''
   do {
     code = ''
-    for (let i = 0; i < 6; i++) code += INVITE_CHARS[Math.floor(Math.random() * INVITE_CHARS.length)]
+    for (let i = 0; i < 8; i++) code += INVITE_CHARS[Math.floor(Math.random() * INVITE_CHARS.length)]
   } while (await prisma.space.findFirst({ where: { inviteCode: code } }))
   return code
 }
@@ -37,7 +37,7 @@ router.get('/', async (req, res) => {
   res.json(spaces.map((space) => {
     const formatted = formatSpace(space)
     // Override memoryCount with visible-only count
-    const visibleMemories = (space.memories || []).filter((m: any) => {
+    const visibleMemories = ((space as any).memories || []).filter((m: any) => {
       const visibleTo = (() => { try { return typeof m.visibleTo === 'string' ? JSON.parse(m.visibleTo) : m.visibleTo } catch { return null } })()
       if (!visibleTo || !Array.isArray(visibleTo) || visibleTo.length === 0) return true
       if (m.createdById === user.id) return true
@@ -74,25 +74,50 @@ router.get('/my-invites', async (req, res) => {
 // GET /api/spaces/:id
 router.get('/:id', async (req, res) => {
   const user = (req as any).user as User
+
+  // Parse pagination params
+  const cursor = req.query.cursor as string | undefined
+  const rawLimit = parseInt(req.query.limit as string) || 20
+  const limit = Math.min(Math.max(rawLimit, 1), 50)
+
+  // Fetch space WITHOUT memories
   const space = await prisma.space.findUnique({
     where: { id: req.params.id },
-    include: {
-      ...spaceIncludes,
-      memories: { include: { substories: true } },
-    },
+    include: spaceIncludes,
   })
   if (!space) { res.status(404).json({ error: 'Space not found' }); return }
 
   const isMember = space.members.some((m: any) => m.userId === user.id && m.status === 'active')
   if (!isMember) { res.status(403).json({ error: 'Not a member of this space' }); return }
 
-  const formatted = formatSpaceWithMemories(space)
-  // Filter by visibleTo
-  formatted.memories = formatted.memories.filter((m: any) => {
-    if (!m.visibleTo || m.visibleTo.length === 0) return true
-    return m.visibleTo.includes(user.id)
-  })
-  res.json(formatted)
+  // Fetch memories with cursor-based pagination (no substories — they are lazy-loaded)
+  const memoriesQuery: any = {
+    where: { spaceId: req.params.id },
+    orderBy: { createdAt: 'desc' as const },
+    take: limit + 1,
+  }
+  if (cursor) {
+    memoriesQuery.cursor = { id: cursor }
+    memoriesQuery.skip = 1
+  }
+  const rawMemories = await prisma.memory.findMany(memoriesQuery)
+
+  // Determine if there are more results
+  const hasMore = rawMemories.length > limit
+  const memoriesSlice = hasMore ? rawMemories.slice(0, limit) : rawMemories
+
+  // Format and apply visibility filtering
+  const memories = memoriesSlice
+    .map(formatMemory)
+    .filter((m: any) => {
+      if (!m.visibleTo || m.visibleTo.length === 0) return true
+      return m.visibleTo.includes(user.id)
+    })
+
+  const nextCursor = hasMore ? memoriesSlice[memoriesSlice.length - 1].id : null
+
+  const formatted = formatSpace(space)
+  res.json({ ...formatted, memories, nextCursor, hasMore })
 })
 
 // POST /api/spaces
@@ -100,6 +125,9 @@ router.post('/', async (req, res) => {
   const user = (req as any).user as User
   const { title, coverEmoji, coverIcon, coverColor, coverImage, type, description } = req.body
   if (!title?.trim()) { res.status(400).json({ error: 'Title is required' }); return }
+
+  const isGroup = (type || 'personal') === 'group'
+  const inviteCode = isGroup ? await generateInviteCode() : undefined
 
   const space = await prisma.space.create({
     data: {
@@ -110,6 +138,7 @@ router.post('/', async (req, res) => {
       coverIcon: coverIcon || '',
       coverColor: coverColor || '',
       type: type || 'personal',
+      inviteCode,
       description: description || '',
       createdById: user.id,
       members: {
@@ -335,6 +364,20 @@ router.patch('/:id', async (req, res) => {
 
   const space = await prisma.space.update({ where: { id: req.params.id }, data, include: spaceIncludes })
   res.json(formatSpace(space))
+})
+
+// POST /api/spaces/:id/regenerate-code — generate a new invite code (owner only)
+router.post('/:id/regenerate-code', async (req, res) => {
+  const user = (req as any).user as User
+  const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
+  if (!myMember || myMember.role !== 'owner') { res.status(403).json({ error: 'Only the owner can regenerate the invite code' }); return }
+
+  const space = await prisma.space.findUnique({ where: { id: req.params.id }, select: { type: true } })
+  if (space?.type !== 'group') { res.status(400).json({ error: 'Only group spaces have invite codes' }); return }
+
+  const newCode = await generateInviteCode()
+  await prisma.space.update({ where: { id: req.params.id }, data: { inviteCode: newCode } })
+  res.json({ inviteCode: newCode })
 })
 
 // DELETE /api/spaces/:id
