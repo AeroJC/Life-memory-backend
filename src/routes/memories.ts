@@ -35,6 +35,9 @@ router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
   res.json(substories.map((s) => ({
     id: s.id, date: s.date, type: s.type, title: s.title, content: s.content,
     photos: s.photos ? JSON.parse(s.photos as string) : undefined, caption: s.caption,
+    textStyle: s.textStyle ? (typeof s.textStyle === 'string' ? JSON.parse(s.textStyle) : s.textStyle) : undefined,
+    titleStyle: s.titleStyle ? (typeof s.titleStyle === 'string' ? JSON.parse(s.titleStyle as string) : s.titleStyle) : undefined,
+    canvasData: s.canvasData ? (typeof s.canvasData === 'string' ? JSON.parse(s.canvasData as string) : s.canvasData) : undefined,
   })))
 })
 
@@ -207,7 +210,7 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  const { date, type, title, content, caption, photos } = req.body
+  const { date, type, title, content, caption, photos, textStyle, titleStyle, canvasData } = req.body
 
   const substory = await prisma.subStory.create({
     data: {
@@ -216,8 +219,11 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
       type: type || 'text',
       title: title?.trim() || null,
       content: type === 'text' ? content?.trim() : null,
-      caption: type !== 'text' ? caption?.trim() : null,
-      photos: type !== 'text' ? JSON.stringify(photos || []) : undefined,
+      caption: type !== 'text' && type !== 'canvas' ? caption?.trim() : null,
+      photos: type !== 'text' && type !== 'canvas' ? JSON.stringify(photos || []) : undefined,
+      textStyle: textStyle ? JSON.stringify(textStyle) : undefined,
+      titleStyle: titleStyle ? JSON.stringify(titleStyle) : undefined,
+      canvasData: type === 'canvas' && canvasData ? JSON.stringify(canvasData) : undefined,
       memoryId: req.params.memoryId,
     },
   })
@@ -230,6 +236,9 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
     content: substory.content,
     photos: substory.photos ? JSON.parse(substory.photos as string) : undefined,
     caption: substory.caption,
+    textStyle: substory.textStyle ? (typeof substory.textStyle === 'string' ? JSON.parse(substory.textStyle) : substory.textStyle) : undefined,
+    titleStyle: substory.titleStyle ? (typeof substory.titleStyle === 'string' ? JSON.parse(substory.titleStyle as string) : substory.titleStyle) : undefined,
+    canvasData: substory.canvasData ? (typeof substory.canvasData === 'string' ? JSON.parse(substory.canvasData as string) : substory.canvasData) : undefined,
   })
 })
 
@@ -240,16 +249,21 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, re
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  const { type, title, content, caption, photos } = req.body
+  const { type, title, content, caption, photos, textStyle, titleStyle, canvasData } = req.body
   const data: any = {}
   if (type !== undefined) data.type = type
   if (title !== undefined) data.title = title?.trim() || null
-  if (type === 'text') {
+  if (textStyle !== undefined) data.textStyle = textStyle ? JSON.stringify(textStyle) : null
+  if (titleStyle !== undefined) data.titleStyle = titleStyle ? JSON.stringify(titleStyle) : null
+  if (canvasData !== undefined) data.canvasData = canvasData ? JSON.stringify(canvasData) : null
+  if (type === 'canvas') {
+    data.content = null; data.caption = null; data.photos = null
+  } else if (type === 'text') {
     if (content !== undefined) data.content = content?.trim() || null
-    data.caption = null; data.photos = null
+    data.caption = null; data.photos = null; data.canvasData = null
   } else if (type !== undefined) {
     if (caption !== undefined) data.caption = caption?.trim() || null
-    data.content = null
+    data.content = null; data.canvasData = null
     if (photos !== undefined) data.photos = JSON.stringify(photos || [])
   } else {
     if (content !== undefined) data.content = content?.trim() || null
@@ -273,6 +287,9 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, re
     title: substory.title, content: substory.content,
     photos: substory.photos ? JSON.parse(substory.photos as string) : undefined,
     caption: substory.caption,
+    textStyle: substory.textStyle ? (typeof substory.textStyle === 'string' ? JSON.parse(substory.textStyle) : substory.textStyle) : undefined,
+    titleStyle: substory.titleStyle ? (typeof substory.titleStyle === 'string' ? JSON.parse(substory.titleStyle as string) : substory.titleStyle) : undefined,
+    canvasData: substory.canvasData ? (typeof substory.canvasData === 'string' ? JSON.parse(substory.canvasData as string) : substory.canvasData) : undefined,
   })
 })
 
