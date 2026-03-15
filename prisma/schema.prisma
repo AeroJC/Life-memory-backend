@@ -22,6 +22,9 @@ model User {
   resetCode             String?
   resetCodeExpiry       DateTime?
 
+  vaultCode      String?
+  hiddenSpaceIds Json    @default("[]")
+
   ownedSpaces  Space[]       @relation("SpaceOwner")
   memberships  SpaceMember[]
   joinRequests JoinRequest[]
@@ -118,13 +121,15 @@ model Memory {
 }
 
 model SubStory {
-  id      String  @id
-  date    String
-  type    String  @default("text")
-  title   String?
-  content String?
-  photos  Json?
-  caption String?
+  id         String  @id
+  date       String
+  type       String  @default("text")
+  title      String?
+  content    String?
+  photos     Json?
+  caption    String?
+  canvasData Json?
+  textStyle  String?
 
   memoryId String
   memory   Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
