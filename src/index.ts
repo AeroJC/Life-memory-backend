@@ -23,6 +23,7 @@ process.on('unhandledRejection', (reason) => {
 
 const allowedOrigins = [
   'http://localhost:5173',
+  'http://localhost:5174',
   'capacitor://localhost',   // iOS Capacitor WebView
   'http://localhost',        // Android Capacitor WebView
   ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : []),
