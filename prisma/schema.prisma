@@ -133,6 +133,7 @@ model SubStory {
   caption    String?
   canvasData Json?
   textStyle  String?
+  titleStyle String?
 
   memoryId String
   memory   Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)

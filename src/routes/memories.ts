@@ -35,6 +35,8 @@ router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
   res.json(substories.map((s) => ({
     id: s.id, date: s.date, type: s.type, title: s.title, content: s.content,
     photos: s.photos ? JSON.parse(s.photos as string) : undefined, caption: s.caption,
+    textStyle: s.textStyle ? JSON.parse(s.textStyle as string) : undefined,
+    titleStyle: s.titleStyle ? JSON.parse(s.titleStyle as string) : undefined,
   })))
 })
 
@@ -207,7 +209,7 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  const { date, type, title, content, caption, photos } = req.body
+  const { date, type, title, content, caption, photos, textStyle, titleStyle } = req.body
 
   const substory = await prisma.subStory.create({
     data: {
@@ -218,6 +220,8 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
       content: type === 'text' ? content?.trim() : null,
       caption: type !== 'text' ? caption?.trim() : null,
       photos: type !== 'text' ? JSON.stringify(photos || []) : undefined,
+      textStyle: textStyle ? JSON.stringify(textStyle) : null,
+      titleStyle: titleStyle ? JSON.stringify(titleStyle) : null,
       memoryId: req.params.memoryId,
     },
   })
@@ -230,6 +234,8 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
     content: substory.content,
     photos: substory.photos ? JSON.parse(substory.photos as string) : undefined,
     caption: substory.caption,
+    textStyle: substory.textStyle ? JSON.parse(substory.textStyle as string) : undefined,
+    titleStyle: substory.titleStyle ? JSON.parse(substory.titleStyle as string) : undefined,
   })
 })
 
@@ -240,10 +246,12 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, re
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  const { type, title, content, caption, photos } = req.body
+  const { type, title, content, caption, photos, textStyle, titleStyle } = req.body
   const data: any = {}
   if (type !== undefined) data.type = type
   if (title !== undefined) data.title = title?.trim() || null
+  if (textStyle !== undefined) data.textStyle = textStyle ? JSON.stringify(textStyle) : null
+  if (titleStyle !== undefined) data.titleStyle = titleStyle ? JSON.stringify(titleStyle) : null
   if (type === 'text') {
     if (content !== undefined) data.content = content?.trim() || null
     data.caption = null; data.photos = null
@@ -273,6 +281,8 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, re
     title: substory.title, content: substory.content,
     photos: substory.photos ? JSON.parse(substory.photos as string) : undefined,
     caption: substory.caption,
+    textStyle: substory.textStyle ? JSON.parse(substory.textStyle as string) : undefined,
+    titleStyle: substory.titleStyle ? JSON.parse(substory.titleStyle as string) : undefined,
   })
 })
 

@@ -74,6 +74,8 @@ export function formatMemory(m: any) {
       content: s.content,
       photos: parseJson(s.photos, undefined),
       caption: s.caption,
+      textStyle: parseJson(s.textStyle, undefined),
+      titleStyle: parseJson(s.titleStyle, undefined),
     })) : undefined,
   }
 }
