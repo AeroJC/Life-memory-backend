@@ -134,6 +134,16 @@ model SubStory {
   canvasData Json?
   textStyle  String?
   titleStyle String?
+  id        String  @id
+  date      String
+  type      String  @default("text")
+  title     String?
+  content   String?
+  photos    Json?
+  caption    String?
+  textStyle  Json?
+  titleStyle Json?
+  canvasData Json?
 
   memoryId String
   memory   Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)

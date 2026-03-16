@@ -16,7 +16,7 @@ function codeExpiry(): Date {
 }
 
 function signToken(userId: string): string {
-  return jwt.sign({ userId }, process.env.JWT_SECRET!, { expiresIn: '30d' })
+  return jwt.sign({ userId }, process.env.JWT_SECRET!, { expiresIn: '7d' })
 }
 
 function validatePassword(password: string): string | null {
@@ -409,6 +409,11 @@ router.patch('/hidden-spaces', authMiddleware, async (req, res) => {
   await prisma.user.update({ where: { id: user.id }, data: { hiddenSpaceIds: spaceIds } })
   invalidateUserCache(user.id)
   res.json({ success: true, hiddenSpaceIds: spaceIds })
+})
+
+// POST /api/auth/refresh — issue a fresh token if the current one is still valid
+router.post('/refresh', authMiddleware, async (req: any, res) => {
+  res.json({ token: signToken(req.user.id) })
 })
 
 // GET /api/auth/users (requires auth)
