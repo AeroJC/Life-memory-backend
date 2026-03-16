@@ -22,6 +22,9 @@ model User {
   resetCode             String?
   resetCodeExpiry       DateTime?
 
+  vaultCode      String?
+  hiddenSpaceIds Json    @default("[]")
+
   ownedSpaces  Space[]       @relation("SpaceOwner")
   memberships  SpaceMember[]
   joinRequests JoinRequest[]
@@ -31,10 +34,13 @@ model User {
 model Space {
   id          String   @id
   title       String
-  coverImage  String   @default("")
-  coverEmoji  String   @default("✨")
-  coverIcon   String   @default("")
-  coverColor  String   @default("")
+  coverImage        String   @default("")
+  coverImageOffsetX Float    @default(50)
+  coverImageOffsetY Float    @default(50)
+  coverImageScale   Float    @default(1)
+  coverEmoji        String   @default("✨")
+  coverIcon         String   @default("")
+  coverColor        String   @default("")
   type        String   @default("personal")
   inviteCode  String?  @unique
   description String   @default("")
@@ -118,16 +124,16 @@ model Memory {
 }
 
 model SubStory {
-  id        String  @id
-  date      String
-  type      String  @default("text")
-  title     String?
-  content   String?
-  photos    Json?
+  id         String  @id
+  date       String
+  type       String  @default("text")
+  title      String?
+  content    String?
+  photos     Json?
   caption    String?
-  textStyle  Json?
-  titleStyle Json?
   canvasData Json?
+  textStyle  String?
+  titleStyle String?
 
   memoryId String
   memory   Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)

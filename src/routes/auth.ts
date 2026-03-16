@@ -189,7 +189,15 @@ router.post('/login', async (req, res) => {
 // GET /api/auth/me — session restore
 router.get('/me', authMiddleware, async (req, res) => {
   const user = (req as any).user
-  res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified } })
+  const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
+  res.json({
+    user: {
+      id: user.id, name: user.name, email: user.email,
+      avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified,
+      hasVaultCode: !!dbUser?.vaultCode,
+      hiddenSpaceIds: (dbUser?.hiddenSpaceIds as string[]) || [],
+    },
+  })
 })
 
 // POST /api/auth/send-verification
@@ -352,6 +360,55 @@ router.post('/login-with-code', async (req, res) => {
   res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone, emailVerified: true }, token: signToken(user.id) })
 })
 
+// POST /api/auth/vault-code — set vault PIN for the first time
+router.post('/vault-code', authMiddleware, async (req, res) => {
+  const user = (req as any).user
+  const { code } = req.body
+  if (!code || !/^\d{4}$/.test(code)) { res.status(400).json({ error: 'Code must be exactly 4 digits' }); return }
+  const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
+  if (dbUser?.vaultCode) { res.status(409).json({ error: 'Vault code already set. Use PATCH to change it.' }); return }
+  const hashed = await bcrypt.hash(code, 10)
+  await prisma.user.update({ where: { id: user.id }, data: { vaultCode: hashed } })
+  invalidateUserCache(user.id)
+  res.json({ success: true })
+})
+
+// PATCH /api/auth/vault-code — change vault PIN (requires current PIN)
+router.patch('/vault-code', authMiddleware, async (req, res) => {
+  const user = (req as any).user
+  const { currentCode, newCode } = req.body
+  if (!currentCode || !newCode) { res.status(400).json({ error: 'Both current and new codes are required' }); return }
+  if (!/^\d{4}$/.test(newCode)) { res.status(400).json({ error: 'New code must be exactly 4 digits' }); return }
+  const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
+  if (!dbUser?.vaultCode) { res.status(400).json({ error: 'No vault code set' }); return }
+  const valid = await bcrypt.compare(currentCode, dbUser.vaultCode)
+  if (!valid) { res.status(401).json({ error: 'Current code is incorrect' }); return }
+  const hashed = await bcrypt.hash(newCode, 10)
+  await prisma.user.update({ where: { id: user.id }, data: { vaultCode: hashed } })
+  invalidateUserCache(user.id)
+  res.json({ success: true })
+})
+
+// POST /api/auth/vault-code/verify — verify entered PIN to unlock vault
+router.post('/vault-code/verify', authMiddleware, async (req, res) => {
+  const user = (req as any).user
+  const { code } = req.body
+  if (!code) { res.status(400).json({ error: 'Code is required' }); return }
+  const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
+  if (!dbUser?.vaultCode) { res.status(400).json({ error: 'No vault code set' }); return }
+  const valid = await bcrypt.compare(code, dbUser.vaultCode)
+  if (!valid) { res.status(401).json({ error: 'Incorrect code' }); return }
+  res.json({ success: true })
+})
+
+// PATCH /api/auth/hidden-spaces — update the list of hidden space IDs
+router.patch('/hidden-spaces', authMiddleware, async (req, res) => {
+  const user = (req as any).user
+  const { spaceIds } = req.body
+  if (!Array.isArray(spaceIds)) { res.status(400).json({ error: 'spaceIds must be an array' }); return }
+  await prisma.user.update({ where: { id: user.id }, data: { hiddenSpaceIds: spaceIds } })
+  invalidateUserCache(user.id)
+  res.json({ success: true, hiddenSpaceIds: spaceIds })
 // POST /api/auth/refresh — issue a fresh token if the current one is still valid
 router.post('/refresh', authMiddleware, async (req: any, res) => {
   res.json({ token: signToken(req.user.id) })
