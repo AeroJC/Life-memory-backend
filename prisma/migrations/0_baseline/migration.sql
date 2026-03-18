@@ -1,3 +1,6 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateTable
 CREATE TABLE "User" (
     "id" TEXT NOT NULL,
@@ -5,7 +8,15 @@ CREATE TABLE "User" (
     "email" TEXT NOT NULL,
     "phone" TEXT,
     "avatar" TEXT NOT NULL DEFAULT '',
+    "password" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "emailVerified" BOOLEAN NOT NULL DEFAULT false,
+    "verificationCode" TEXT,
+    "verificationCodeExpiry" TIMESTAMP(3),
+    "resetCode" TEXT,
+    "resetCodeExpiry" TIMESTAMP(3),
+    "vaultCode" TEXT,
+    "hiddenSpaceIds" JSONB NOT NULL DEFAULT '[]',
 
     CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
@@ -15,7 +26,12 @@ CREATE TABLE "Space" (
     "id" TEXT NOT NULL,
     "title" TEXT NOT NULL,
     "coverImage" TEXT NOT NULL DEFAULT '',
+    "coverImageOffsetX" DOUBLE PRECISION NOT NULL DEFAULT 50,
+    "coverImageOffsetY" DOUBLE PRECISION NOT NULL DEFAULT 50,
+    "coverImageScale" DOUBLE PRECISION NOT NULL DEFAULT 1,
     "coverEmoji" TEXT NOT NULL DEFAULT '✨',
+    "coverIcon" TEXT NOT NULL DEFAULT '',
+    "coverColor" TEXT NOT NULL DEFAULT '',
     "type" TEXT NOT NULL DEFAULT 'personal',
     "inviteCode" TEXT,
     "description" TEXT NOT NULL DEFAULT '',
@@ -30,6 +46,7 @@ CREATE TABLE "SpaceMember" (
     "id" TEXT NOT NULL,
     "role" TEXT NOT NULL DEFAULT 'member',
     "status" TEXT NOT NULL DEFAULT 'active',
+    "permission" TEXT NOT NULL DEFAULT 'edit',
     "joinedAt" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "spaceId" TEXT NOT NULL,
@@ -45,6 +62,18 @@ CREATE TABLE "JoinRequest" (
     "spaceId" TEXT NOT NULL,
 
     CONSTRAINT "JoinRequest_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PendingInvite" (
+    "id" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "spaceId" TEXT NOT NULL,
+    "invitedBy" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PendingInvite_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -75,6 +104,9 @@ CREATE TABLE "SubStory" (
     "content" TEXT,
     "photos" JSONB,
     "caption" TEXT,
+    "canvasData" JSONB,
+    "textStyle" TEXT,
+    "titleStyle" TEXT,
     "memoryId" TEXT NOT NULL,
 
     CONSTRAINT "SubStory_pkey" PRIMARY KEY ("id")
@@ -87,10 +119,40 @@ CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 CREATE UNIQUE INDEX "Space_inviteCode_key" ON "Space"("inviteCode");
 
 -- CreateIndex
+CREATE INDEX "SpaceMember_userId_idx" ON "SpaceMember"("userId");
+
+-- CreateIndex
+CREATE INDEX "SpaceMember_spaceId_idx" ON "SpaceMember"("spaceId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "SpaceMember_userId_spaceId_key" ON "SpaceMember"("userId", "spaceId");
 
 -- CreateIndex
+CREATE INDEX "JoinRequest_userId_idx" ON "JoinRequest"("userId");
+
+-- CreateIndex
+CREATE INDEX "JoinRequest_spaceId_idx" ON "JoinRequest"("spaceId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "JoinRequest_userId_spaceId_key" ON "JoinRequest"("userId", "spaceId");
+
+-- CreateIndex
+CREATE INDEX "PendingInvite_email_idx" ON "PendingInvite"("email");
+
+-- CreateIndex
+CREATE INDEX "PendingInvite_spaceId_idx" ON "PendingInvite"("spaceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PendingInvite_email_spaceId_key" ON "PendingInvite"("email", "spaceId");
+
+-- CreateIndex
+CREATE INDEX "Memory_spaceId_idx" ON "Memory"("spaceId");
+
+-- CreateIndex
+CREATE INDEX "Memory_createdById_idx" ON "Memory"("createdById");
+
+-- CreateIndex
+CREATE INDEX "SubStory_memoryId_idx" ON "SubStory"("memoryId");
 
 -- AddForeignKey
 ALTER TABLE "Space" ADD CONSTRAINT "Space_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -108,6 +170,9 @@ ALTER TABLE "JoinRequest" ADD CONSTRAINT "JoinRequest_userId_fkey" FOREIGN KEY (
 ALTER TABLE "JoinRequest" ADD CONSTRAINT "JoinRequest_spaceId_fkey" FOREIGN KEY ("spaceId") REFERENCES "Space"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "PendingInvite" ADD CONSTRAINT "PendingInvite_spaceId_fkey" FOREIGN KEY ("spaceId") REFERENCES "Space"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Memory" ADD CONSTRAINT "Memory_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -115,3 +180,4 @@ ALTER TABLE "Memory" ADD CONSTRAINT "Memory_spaceId_fkey" FOREIGN KEY ("spaceId"
 
 -- AddForeignKey
 ALTER TABLE "SubStory" ADD CONSTRAINT "SubStory_memoryId_fkey" FOREIGN KEY ("memoryId") REFERENCES "Memory"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+

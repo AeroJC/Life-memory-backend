@@ -1,9 +1,11 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { z } from 'zod'
 import { prisma } from '../db.js'
 import { Resend } from 'resend'
 import { authMiddleware, invalidateUserCache } from '../middleware/auth.js'
+import { validate } from '../middleware/validate.js'
 
 const router = Router()
 
@@ -75,13 +77,79 @@ async function sendResetEmail(email: string, code: string) {
 }
 
 
+const preSignupSchema = z.object({
+  email: z.string().trim().min(1, 'Email is required').email('Enter a valid email address'),
+})
+
+const completeSignupSchema = z.object({
+  userId: z.string().min(1, 'userId is required'),
+  name: z.string().trim().min(1, 'Name is required'),
+  password: z.string().min(1, 'Password is required'),
+})
+
+const loginSchema = z.object({
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  password: z.string().optional(),
+}).refine(data => data.email || data.phone, { message: 'Email or phone required' })
+
+const sendVerificationSchema = z.object({
+  userId: z.string().min(1, 'userId is required'),
+})
+
+const verifyEmailSchema = z.object({
+  userId: z.string().min(1, 'userId is required'),
+  code: z.string().min(1, 'Code is required'),
+})
+
+const forgotPasswordSchema = z.object({
+  email: z.string().trim().min(1, 'Email is required'),
+})
+
+const resetPasswordSchema = z.object({
+  email: z.string().trim().min(1, 'Email is required'),
+  code: z.string().trim().min(1, 'Code is required'),
+  newPassword: z.string().min(6, 'Password must be at least 6 characters'),
+})
+
+const changePasswordSchema = z.object({
+  oldPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(1, 'New password is required'),
+})
+
+const profileSchema = z.object({
+  name: z.string().trim().min(2, 'Name must be at least 2 characters'),
+})
+
+const sendLoginCodeSchema = z.object({
+  email: z.string().trim().min(1, 'Email required'),
+})
+
+const loginWithCodeSchema = z.object({
+  email: z.string().trim().min(1, 'Email required'),
+  code: z.string().trim().min(1, 'Code required'),
+})
+
+const vaultCodeSchema = z.object({
+  code: z.string().regex(/^\d{4}$/, 'Code must be exactly 4 digits'),
+})
+
+const changeVaultCodeSchema = z.object({
+  currentCode: z.string().min(1, 'Current code is required'),
+  newCode: z.string().regex(/^\d{4}$/, 'New code must be exactly 4 digits'),
+})
+
+const verifyVaultCodeSchema = z.object({
+  code: z.string().min(1, 'Code is required'),
+})
+
+const hiddenSpacesSchema = z.object({
+  spaceIds: z.array(z.string()),
+})
+
 // POST /api/auth/pre-signup — step 1: send verification code to email
-router.post('/pre-signup', async (req, res) => {
+router.post('/pre-signup', validate(preSignupSchema), async (req, res) => {
   const { email } = req.body
-  if (!email?.trim()) { res.status(400).json({ error: 'Email is required' }); return }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())) {
-    res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com)' }); return
-  }
   const emailLower = email.trim().toLowerCase()
   const existing = await prisma.user.findUnique({ where: { email: emailLower } })
 
@@ -116,11 +184,8 @@ router.post('/pre-signup', async (req, res) => {
 })
 
 // POST /api/auth/complete-signup — step 3: set name + password after email verified
-router.post('/complete-signup', async (req, res) => {
+router.post('/complete-signup', validate(completeSignupSchema), async (req, res) => {
   const { userId, name, password } = req.body
-  if (!userId || !name?.trim() || !password) {
-    res.status(400).json({ error: 'All fields are required' }); return
-  }
   const pwErr = validatePassword(password)
   if (pwErr) { res.status(400).json({ error: pwErr }); return }
   const user = await prisma.user.findUnique({ where: { id: userId } })
@@ -140,7 +205,7 @@ router.post('/complete-signup', async (req, res) => {
 })
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', validate(loginSchema), async (req, res) => {
   const { email, phone, password } = req.body
 
   // Email + password login
@@ -183,27 +248,24 @@ router.post('/login', async (req, res) => {
     return
   }
 
-  res.status(400).json({ error: 'Email or phone required' })
 })
 
 // GET /api/auth/me — session restore
 router.get('/me', authMiddleware, async (req, res) => {
   const user = (req as any).user
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
   res.json({
     user: {
       id: user.id, name: user.name, email: user.email,
       avatar: user.avatar, phone: user.phone, emailVerified: user.emailVerified,
-      hasVaultCode: !!dbUser?.vaultCode,
-      hiddenSpaceIds: (dbUser?.hiddenSpaceIds as string[]) || [],
+      hasVaultCode: !!user.vaultCode,
+      hiddenSpaceIds: (user.hiddenSpaceIds as string[]) || [],
     },
   })
 })
 
 // POST /api/auth/send-verification
-router.post('/send-verification', async (req, res) => {
+router.post('/send-verification', validate(sendVerificationSchema), async (req, res) => {
   const { userId } = req.body
-  if (!userId) { res.status(400).json({ error: 'userId is required' }); return }
   const user = await prisma.user.findUnique({ where: { id: userId } })
   if (!user) { res.status(404).json({ error: 'User not found' }); return }
   if (user.emailVerified) { res.json({ success: true, message: 'Email already verified' }); return }
@@ -217,9 +279,8 @@ router.post('/send-verification', async (req, res) => {
 })
 
 // POST /api/auth/verify-email
-router.post('/verify-email', async (req, res) => {
+router.post('/verify-email', validate(verifyEmailSchema), async (req, res) => {
   const { userId, code } = req.body
-  if (!userId || !code) { res.status(400).json({ error: 'userId and code are required' }); return }
   const user = await prisma.user.findUnique({ where: { id: userId } })
   if (!user) { res.status(404).json({ error: 'User not found' }); return }
   if (user.emailVerified) { res.json({ user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, emailVerified: true }, token: signToken(user.id) }); return }
@@ -237,9 +298,8 @@ router.post('/verify-email', async (req, res) => {
 })
 
 // POST /api/auth/forgot-password
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', validate(forgotPasswordSchema), async (req, res) => {
   const { email } = req.body
-  if (!email?.trim()) { res.status(400).json({ error: 'Email is required' }); return }
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } })
   // Always respond success to avoid email enumeration
   if (!user) { res.json({ success: true }); return }
@@ -253,14 +313,8 @@ router.post('/forgot-password', async (req, res) => {
 })
 
 // POST /api/auth/reset-password
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', validate(resetPasswordSchema), async (req, res) => {
   const { email, code, newPassword } = req.body
-  if (!email?.trim() || !code?.trim() || !newPassword) {
-    res.status(400).json({ error: 'Email, code and new password are required' }); return
-  }
-  if (newPassword.length < 6) {
-    res.status(400).json({ error: 'Password must be at least 6 characters' }); return
-  }
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } })
   if (!user || user.resetCode !== code.trim()) {
     res.status(400).json({ error: 'Invalid or expired reset code' }); return
@@ -277,11 +331,10 @@ router.post('/reset-password', async (req, res) => {
 })
 
 // POST /api/auth/change-password (requires auth)
-router.post('/change-password', authMiddleware, async (req, res) => {
+router.post('/change-password', authMiddleware, validate(changePasswordSchema), async (req, res) => {
   const user = (req as any).user
   if (!user) { res.status(401).json({ error: 'Unauthorized' }); return }
   const { oldPassword, newPassword } = req.body
-  if (!oldPassword || !newPassword) { res.status(400).json({ error: 'Both passwords are required' }); return }
   const pwErr = validatePassword(newPassword)
   if (pwErr) { res.status(400).json({ error: pwErr }); return }
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
@@ -295,13 +348,10 @@ router.post('/change-password', authMiddleware, async (req, res) => {
 })
 
 // PATCH /api/auth/profile — update username
-router.patch('/profile', authMiddleware, async (req, res) => {
+router.patch('/profile', authMiddleware, validate(profileSchema), async (req, res) => {
   const user = (req as any).user
   if (!user) { res.status(401).json({ error: 'Unauthorized' }); return }
   const { name } = req.body
-  if (!name?.trim() || name.trim().length < 2) {
-    res.status(400).json({ error: 'Name must be at least 2 characters' }); return
-  }
   const updated = await prisma.user.update({
     where: { id: user.id },
     data: { name: name.trim() },
@@ -311,9 +361,8 @@ router.patch('/profile', authMiddleware, async (req, res) => {
 })
 
 // POST /api/auth/send-login-code — send a 6-digit code for passwordless login
-router.post('/send-login-code', async (req, res) => {
+router.post('/send-login-code', validate(sendLoginCodeSchema), async (req, res) => {
   const { email } = req.body
-  if (!email?.trim()) { res.status(400).json({ error: 'Email required' }); return }
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } })
   if (!user) { res.status(404).json({ error: 'No account found with this email', noAccount: true }); return }
   if (!user.emailVerified) { res.status(403).json({ error: 'Email not verified' }); return }
@@ -344,9 +393,8 @@ router.post('/send-login-code', async (req, res) => {
 })
 
 // POST /api/auth/login-with-code — verify login code
-router.post('/login-with-code', async (req, res) => {
+router.post('/login-with-code', validate(loginWithCodeSchema), async (req, res) => {
   const { email, code } = req.body
-  if (!email?.trim() || !code?.trim()) { res.status(400).json({ error: 'Email and code required' }); return }
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } })
   if (!user) { res.status(404).json({ error: 'No account found' }); return }
   if (!user.verificationCode || user.verificationCode !== code.trim()) {
@@ -361,10 +409,9 @@ router.post('/login-with-code', async (req, res) => {
 })
 
 // POST /api/auth/vault-code — set vault PIN for the first time
-router.post('/vault-code', authMiddleware, async (req, res) => {
+router.post('/vault-code', authMiddleware, validate(vaultCodeSchema), async (req, res) => {
   const user = (req as any).user
   const { code } = req.body
-  if (!code || !/^\d{4}$/.test(code)) { res.status(400).json({ error: 'Code must be exactly 4 digits' }); return }
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
   if (dbUser?.vaultCode) { res.status(409).json({ error: 'Vault code already set. Use PATCH to change it.' }); return }
   const hashed = await bcrypt.hash(code, 10)
@@ -374,11 +421,9 @@ router.post('/vault-code', authMiddleware, async (req, res) => {
 })
 
 // PATCH /api/auth/vault-code — change vault PIN (requires current PIN)
-router.patch('/vault-code', authMiddleware, async (req, res) => {
+router.patch('/vault-code', authMiddleware, validate(changeVaultCodeSchema), async (req, res) => {
   const user = (req as any).user
   const { currentCode, newCode } = req.body
-  if (!currentCode || !newCode) { res.status(400).json({ error: 'Both current and new codes are required' }); return }
-  if (!/^\d{4}$/.test(newCode)) { res.status(400).json({ error: 'New code must be exactly 4 digits' }); return }
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
   if (!dbUser?.vaultCode) { res.status(400).json({ error: 'No vault code set' }); return }
   const valid = await bcrypt.compare(currentCode, dbUser.vaultCode)
@@ -390,10 +435,9 @@ router.patch('/vault-code', authMiddleware, async (req, res) => {
 })
 
 // POST /api/auth/vault-code/verify — verify entered PIN to unlock vault
-router.post('/vault-code/verify', authMiddleware, async (req, res) => {
+router.post('/vault-code/verify', authMiddleware, validate(verifyVaultCodeSchema), async (req, res) => {
   const user = (req as any).user
   const { code } = req.body
-  if (!code) { res.status(400).json({ error: 'Code is required' }); return }
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
   if (!dbUser?.vaultCode) { res.status(400).json({ error: 'No vault code set' }); return }
   const valid = await bcrypt.compare(code, dbUser.vaultCode)
@@ -402,10 +446,9 @@ router.post('/vault-code/verify', authMiddleware, async (req, res) => {
 })
 
 // PATCH /api/auth/hidden-spaces — update the list of hidden space IDs
-router.patch('/hidden-spaces', authMiddleware, async (req, res) => {
+router.patch('/hidden-spaces', authMiddleware, validate(hiddenSpacesSchema), async (req, res) => {
   const user = (req as any).user
   const { spaceIds } = req.body
-  if (!Array.isArray(spaceIds)) { res.status(400).json({ error: 'spaceIds must be an array' }); return }
   await prisma.user.update({ where: { id: user.id }, data: { hiddenSpaceIds: spaceIds } })
   invalidateUserCache(user.id)
   res.json({ success: true, hiddenSpaceIds: spaceIds })

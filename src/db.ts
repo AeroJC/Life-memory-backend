@@ -5,7 +5,7 @@ import { PrismaClient } from './generated/prisma/client.js'
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  max: parseInt(process.env.DB_POOL_MAX || '10'),
+  max: parseInt(process.env.DB_POOL_MAX || '20'),
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 })

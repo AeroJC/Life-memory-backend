@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express, { NextFunction, Request, Response } from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
+import compression from 'compression'
 import rateLimit from 'express-rate-limit'
 import { prisma } from './db.js'
 import { logger, generateRequestId } from './logger.js'
@@ -9,6 +10,20 @@ import authRoutes from './routes/auth.js'
 import spaceRoutes from './routes/spaces.js'
 import memoryRoutes from './routes/memories.js'
 import { sanitizeBody } from './middleware/sanitize.js'
+import { responseHelpers } from './middleware/response.js'
+
+// Validate required environment variables
+const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET'] as const
+const missing = requiredEnvVars.filter(v => !process.env[v])
+if (missing.length > 0) {
+  throw new Error(`Missing required environment variables: ${missing.join(', ')}`)
+}
+
+const optionalEnvVars = ['RESEND_API_KEY', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'] as const
+const missingOptional = optionalEnvVars.filter(v => !process.env[v])
+if (missingOptional.length > 0) {
+  console.warn(`Warning: Missing optional environment variables: ${missingOptional.join(', ')}`)
+}
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -37,10 +52,14 @@ app.use(cors({
   credentials: true,
 }))
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
+app.use(compression())
 app.use(express.json({ limit: '2mb' }))
 
 // Sanitize request bodies — skip rich text fields that contain intentional HTML
 app.use(sanitizeBody(new Set(['story', 'content', 'caption'])))
+
+// Attach consistent response helpers (res.apiSuccess / res.apiError)
+app.use(responseHelpers)
 
 // Request ID + logging
 app.use((req, res, next) => {

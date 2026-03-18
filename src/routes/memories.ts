@@ -1,11 +1,24 @@
 import { Router } from 'express'
+import rateLimit from 'express-rate-limit'
+import { z } from 'zod'
 import { prisma, formatMemory } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { validate } from '../middleware/validate.js'
 import { User } from '../types.js'
 import { deleteCloudinaryImages, getRemovedUrls } from '../cloudinary.js'
+import { invalidateSpaceCache } from './spaces.js'
 
 const router = Router()
 router.use(authMiddleware)
+
+// Rate limit write operations (create, update, delete)
+const memoryWriteLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30,
+  message: { error: 'Too many requests, please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
 
 async function validateMembership(spaceId: string, userId: string) {
   const member = await prisma.spaceMember.findUnique({
@@ -25,6 +38,55 @@ async function validateEditPermission(spaceId: string, userId: string) {
   return (member.permission ?? 'edit') === 'edit'
 }
 
+const createMemorySchema = z.object({
+  title: z.string().trim().min(1, 'Title is required'),
+  date: z.string().optional(),
+  story: z.string().trim().min(1, 'Story is required'),
+  location: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  photos: z.array(z.string().max(500, 'Invalid photo URL')).max(20, 'Maximum 20 photos per memory').optional(),
+  endDate: z.string().optional(),
+  visibleTo: z.array(z.string()).optional(),
+})
+
+const updateMemorySchema = z.object({
+  title: z.string().trim().optional(),
+  date: z.string().optional(),
+  story: z.string().trim().optional(),
+  location: z.string().nullable().optional(),
+  tags: z.array(z.string()).nullable().optional(),
+  photos: z.array(z.string()).optional(),
+  endDate: z.string().optional(),
+  visibleTo: z.array(z.string()).nullable().optional(),
+})
+
+const reactSchema = z.object({
+  emoji: z.string().min(1, 'Emoji is required'),
+})
+
+const createSubstorySchema = z.object({
+  date: z.string().optional(),
+  type: z.enum(['text', 'photo', 'photos', 'img-left', 'img-right', 'img-top', 'img-bottom', 'canvas']).optional(),
+  title: z.string().optional(),
+  content: z.string().optional(),
+  caption: z.string().optional(),
+  photos: z.array(z.string()).optional(),
+  textStyle: z.record(z.string(), z.unknown()).optional(),
+  titleStyle: z.record(z.string(), z.unknown()).optional(),
+  canvasData: z.record(z.string(), z.unknown()).optional(),
+})
+
+const updateSubstorySchema = z.object({
+  type: z.enum(['text', 'photo', 'photos', 'img-left', 'img-right', 'img-top', 'img-bottom', 'canvas']).optional(),
+  title: z.string().nullable().optional(),
+  content: z.string().nullable().optional(),
+  caption: z.string().nullable().optional(),
+  photos: z.array(z.string()).optional(),
+  textStyle: z.record(z.string(), z.unknown()).nullable().optional(),
+  titleStyle: z.record(z.string(), z.unknown()).nullable().optional(),
+  canvasData: z.record(z.string(), z.unknown()).nullable().optional(),
+})
+
 // GET /api/spaces/:spaceId/memories/:memoryId/substories
 router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
   const user = (req as any).user as User
@@ -42,29 +104,13 @@ router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
 })
 
 // POST /api/spaces/:spaceId/memories
-router.post('/:spaceId/memories', async (req, res) => {
+router.post('/:spaceId/memories', memoryWriteLimiter, validate(createMemorySchema), async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateEditPermission(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
   const { title, date, story, location, tags, photos, endDate, visibleTo } = req.body
-  if (!title?.trim() || !story?.trim()) {
-    res.status(400).json({ error: 'Title and story are required' }); return
-  }
-
-  // Validate photo URLs
-  if (photos && Array.isArray(photos)) {
-    const maxPhotos = 20
-    if (photos.length > maxPhotos) {
-      res.status(400).json({ error: `Maximum ${maxPhotos} photos per memory` }); return
-    }
-    for (const url of photos) {
-      if (typeof url !== 'string' || url.length > 500) {
-        res.status(400).json({ error: 'Invalid photo URL' }); return
-      }
-    }
-  }
 
   const memory = await prisma.memory.create({
     data: {
@@ -83,12 +129,13 @@ router.post('/:spaceId/memories', async (req, res) => {
     },
     include: { substories: true },
   })
+  invalidateSpaceCache(undefined, req.params.spaceId)
 
   res.status(201).json(formatMemory(memory))
 })
 
 // PUT /api/spaces/:spaceId/memories/:memoryId
-router.put('/:spaceId/memories/:memoryId', async (req, res) => {
+router.put('/:spaceId/memories/:memoryId', memoryWriteLimiter, validate(updateMemorySchema), async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateEditPermission(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
@@ -134,7 +181,7 @@ router.put('/:spaceId/memories/:memoryId', async (req, res) => {
 })
 
 // DELETE /api/spaces/:spaceId/memories/:memoryId
-router.delete('/:spaceId/memories/:memoryId', async (req, res) => {
+router.delete('/:spaceId/memories/:memoryId', memoryWriteLimiter, async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateEditPermission(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
@@ -168,18 +215,18 @@ router.delete('/:spaceId/memories/:memoryId', async (req, res) => {
   }
 
   await prisma.memory.delete({ where: { id: req.params.memoryId } })
+  invalidateSpaceCache(undefined, req.params.spaceId)
   res.json({ success: true })
 })
 
 // POST /api/spaces/:spaceId/memories/:memoryId/react
-router.post('/:spaceId/memories/:memoryId/react', async (req, res) => {
+router.post('/:spaceId/memories/:memoryId/react', validate(reactSchema), async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateMembership(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'Not a member of this space' }); return
   }
 
   const { emoji } = req.body
-  if (!emoji) { res.status(400).json({ error: 'Emoji is required' }); return }
 
   // Use a transaction with row-level lock to prevent race conditions
   const updated = await prisma.$transaction(async (tx) => {
@@ -204,7 +251,7 @@ router.post('/:spaceId/memories/:memoryId/react', async (req, res) => {
 })
 
 // POST /api/spaces/:spaceId/memories/:memoryId/substories
-router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
+router.post('/:spaceId/memories/:memoryId/substories', memoryWriteLimiter, validate(createSubstorySchema), async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateEditPermission(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
@@ -243,7 +290,7 @@ router.post('/:spaceId/memories/:memoryId/substories', async (req, res) => {
 })
 
 // PUT /api/spaces/:spaceId/memories/:memoryId/substories/:substoryId
-router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, res) => {
+router.put('/:spaceId/memories/:memoryId/substories/:substoryId', memoryWriteLimiter, validate(updateSubstorySchema), async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateEditPermission(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'You have view-only access to this space' }); return
@@ -294,7 +341,7 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, re
 })
 
 // DELETE /api/spaces/:spaceId/memories/:memoryId/substories/:substoryId
-router.delete('/:spaceId/memories/:memoryId/substories/:substoryId', async (req, res) => {
+router.delete('/:spaceId/memories/:memoryId/substories/:substoryId', memoryWriteLimiter, async (req, res) => {
   const user = (req as any).user as User
   if (!(await validateEditPermission(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'You have view-only access to this space' }); return

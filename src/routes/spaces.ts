@@ -1,9 +1,44 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { prisma, formatSpace, formatSpaceWithMemories, formatMemory } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { validate } from '../middleware/validate.js'
 import { User } from '../types.js'
 import { Resend } from 'resend'
 import { deleteCloudinaryImages } from '../cloudinary.js'
+
+// In-memory response cache for read-heavy endpoints
+const responseCache = new Map<string, { data: any; expiresAt: number }>()
+const RESPONSE_CACHE_TTL = 30 * 1000 // 30 seconds
+
+function getCachedResponse(key: string) {
+  const entry = responseCache.get(key)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) {
+    responseCache.delete(key)
+    return null
+  }
+  return entry.data
+}
+
+function setCachedResponse(key: string, data: any) {
+  responseCache.set(key, { data, expiresAt: Date.now() + RESPONSE_CACHE_TTL })
+}
+
+export function invalidateSpaceCache(userId?: string, spaceId?: string) {
+  for (const key of responseCache.keys()) {
+    if (userId && key.startsWith(`spaces:${userId}`)) responseCache.delete(key)
+    if (spaceId && key.includes(spaceId)) responseCache.delete(key)
+  }
+}
+
+// Clean expired entries every 2 minutes
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, entry] of responseCache) {
+    if (now > entry.expiresAt) responseCache.delete(key)
+  }
+}, 2 * 60 * 1000).unref()
 
 const INVITE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 async function generateInviteCode(): Promise<string> {
@@ -24,9 +59,55 @@ const spaceIncludes = {
 const router = Router()
 router.use(authMiddleware)
 
+const createSpaceSchema = z.object({
+  title: z.string().trim().min(1, 'Title is required'),
+  coverEmoji: z.string().optional(),
+  coverIcon: z.string().optional(),
+  coverColor: z.string().optional(),
+  coverImage: z.string().optional(),
+  coverImageOffsetX: z.number().optional(),
+  coverImageOffsetY: z.number().optional(),
+  coverImageScale: z.number().optional(),
+  type: z.enum(['personal', 'group']).optional(),
+  description: z.string().optional(),
+})
+
+const joinSchema = z.object({
+  code: z.string().trim().min(1, 'Invite code is required'),
+})
+
+const approveRejectSchema = z.object({
+  userId: z.string().min(1, 'userId is required'),
+})
+
+const inviteSchema = z.object({
+  email: z.string().trim().min(1, 'Email is required').email('Enter a valid email address'),
+})
+
+const updateSpaceSchema = z.object({
+  title: z.string().trim().optional(),
+  coverEmoji: z.string().optional(),
+  coverIcon: z.string().optional(),
+  coverColor: z.string().optional(),
+  coverImage: z.string().optional(),
+  coverImageOffsetX: z.number().optional(),
+  coverImageOffsetY: z.number().optional(),
+  coverImageScale: z.number().optional(),
+  description: z.string().optional(),
+})
+
+const updateMemberSchema = z.object({
+  role: z.string().optional(),
+  permission: z.enum(['view', 'edit']).optional(),
+})
+
 // GET /api/spaces
 router.get('/', async (req, res) => {
   const user = (req as any).user as User
+  const cacheKey = `spaces:${user.id}`
+  const cached = getCachedResponse(cacheKey)
+  if (cached) { res.json(cached); return }
+
   const spaces = await prisma.space.findMany({
     where: { members: { some: { userId: user.id, status: 'active' } } },
     include: {
@@ -34,7 +115,7 @@ router.get('/', async (req, res) => {
       memories: { select: { visibleTo: true, createdById: true } },
     },
   })
-  res.json(spaces.map((space) => {
+  const result = spaces.map((space) => {
     const formatted = formatSpace(space)
     // Override memoryCount with visible-only count
     const visibleMemories = ((space as any).memories || []).filter((m: any) => {
@@ -45,7 +126,9 @@ router.get('/', async (req, res) => {
     })
     formatted.memoryCount = visibleMemories.length
     return formatted
-  }))
+  })
+  setCachedResponse(cacheKey, result)
+  res.json(result)
 })
 
 // GET /api/spaces/my-invites
@@ -79,6 +162,10 @@ router.get('/:id', async (req, res) => {
   const cursor = req.query.cursor as string | undefined
   const rawLimit = parseInt(req.query.limit as string) || 20
   const limit = Math.min(Math.max(rawLimit, 1), 50)
+
+  const cacheKey = `space:${req.params.id}:${user.id}:${cursor || 'first'}:${limit}`
+  const cached = getCachedResponse(cacheKey)
+  if (cached) { res.json(cached); return }
 
   // Fetch space WITHOUT memories
   const space = await prisma.space.findUnique({
@@ -118,14 +205,15 @@ router.get('/:id', async (req, res) => {
   const nextCursor = hasMore ? memoriesSlice[memoriesSlice.length - 1].id : null
 
   const formatted = formatSpace(space)
-  res.json({ ...formatted, memories, nextCursor, hasMore })
+  const result = { ...formatted, memories, nextCursor, hasMore }
+  setCachedResponse(cacheKey, result)
+  res.json(result)
 })
 
 // POST /api/spaces
-router.post('/', async (req, res) => {
+router.post('/', validate(createSpaceSchema), async (req, res) => {
   const user = (req as any).user as User
   const { title, coverEmoji, coverIcon, coverColor, coverImage, coverImageOffsetX, coverImageOffsetY, coverImageScale, type, description } = req.body
-  if (!title?.trim()) { res.status(400).json({ error: 'Title is required' }); return }
 
   const isGroup = (type || 'personal') === 'group'
   const inviteCode = isGroup ? await generateInviteCode() : undefined
@@ -151,14 +239,14 @@ router.post('/', async (req, res) => {
     },
     include: spaceIncludes,
   })
+  invalidateSpaceCache(user.id)
   res.status(201).json(formatSpace(space))
 })
 
 // POST /api/spaces/join
-router.post('/join', async (req, res) => {
+router.post('/join', validate(joinSchema), async (req, res) => {
   const user = (req as any).user as User
   const { code } = req.body
-  if (!code?.trim()) { res.status(400).json({ error: 'Invite code is required' }); return }
 
   const space = await prisma.space.findUnique({
     where: { inviteCode: code.toUpperCase().trim() },
@@ -175,11 +263,12 @@ router.post('/join', async (req, res) => {
   await prisma.joinRequest.create({
     data: { userId: user.id, spaceId: space.id, requestedAt: new Date().toISOString().split('T')[0] },
   })
+  invalidateSpaceCache(undefined, space.id)
   res.json({ success: true, spaceName: space.title })
 })
 
 // POST /api/spaces/:id/approve
-router.post('/:id/approve', async (req, res) => {
+router.post('/:id/approve', validate(approveRejectSchema), async (req, res) => {
   const user = (req as any).user as User
   const { userId } = req.body
 
@@ -199,12 +288,14 @@ router.post('/:id/approve', async (req, res) => {
     }),
     prisma.joinRequest.delete({ where: { userId_spaceId: { userId, spaceId: req.params.id } } }),
   ])
+  invalidateSpaceCache(userId, req.params.id)
+  invalidateSpaceCache(user.id)
 
   res.json({ success: true, member: { userId, name: requestUser?.name, role: 'member', status: 'active' } })
 })
 
 // POST /api/spaces/:id/reject
-router.post('/:id/reject', async (req, res) => {
+router.post('/:id/reject', validate(approveRejectSchema), async (req, res) => {
   const user = (req as any).user as User
   const { userId } = req.body
 
@@ -214,17 +305,14 @@ router.post('/:id/reject', async (req, res) => {
   }
 
   await prisma.joinRequest.deleteMany({ where: { userId, spaceId: req.params.id } })
+  invalidateSpaceCache(undefined, req.params.id)
   res.json({ success: true })
 })
 
 // POST /api/spaces/:id/invite
-router.post('/:id/invite', async (req, res) => {
+router.post('/:id/invite', validate(inviteSchema), async (req, res) => {
   const user = (req as any).user as User
   const { email } = req.body
-
-  if (!email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())) {
-    res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com)' }); return
-  }
 
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.status !== 'active') {
@@ -311,6 +399,7 @@ router.post('/:id/accept-invite', async (req, res) => {
     }),
     prisma.pendingInvite.delete({ where: { email_spaceId: { email: user.email, spaceId: req.params.id } } }),
   ])
+  invalidateSpaceCache(user.id, req.params.id)
   res.json({ success: true })
 })
 
@@ -352,7 +441,7 @@ router.delete('/:id/pending-invites/:inviteId', async (req, res) => {
 })
 
 // PATCH /api/spaces/:id
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', validate(updateSpaceSchema), async (req, res) => {
   const user = (req as any).user as User
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') { res.status(403).json({ error: 'Only the owner can edit this space' }); return }
@@ -370,6 +459,7 @@ router.patch('/:id', async (req, res) => {
   if (description !== undefined) data.description = description
 
   const space = await prisma.space.update({ where: { id: req.params.id }, data, include: spaceIncludes })
+  invalidateSpaceCache(undefined, req.params.id)
   res.json(formatSpace(space))
 })
 
@@ -412,6 +502,7 @@ router.delete('/:id', async (req, res) => {
 
   // Delete space from DB (cascades to memories, substories, members, invites)
   await prisma.space.delete({ where: { id: req.params.id } })
+  invalidateSpaceCache(user.id, req.params.id)
 
   // Respond immediately — clean up Cloudinary in background
   res.json({ success: true })
@@ -425,6 +516,7 @@ router.post('/:id/leave', async (req, res) => {
   if (!myMember) { res.status(404).json({ error: 'You are not a member of this space' }); return }
   if (myMember.role === 'owner') { res.status(403).json({ error: 'The owner cannot leave. Transfer ownership or delete the space.' }); return }
   await prisma.spaceMember.delete({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
+  invalidateSpaceCache(user.id, req.params.id)
   res.json({ success: true })
 })
 
@@ -439,11 +531,12 @@ router.delete('/:id/members/:userId', async (req, res) => {
   if (targetMember?.role === 'owner') { res.status(403).json({ error: 'Cannot remove the owner' }); return }
 
   await prisma.spaceMember.deleteMany({ where: { userId: req.params.userId, spaceId: req.params.id } })
+  invalidateSpaceCache(req.params.userId, req.params.id)
   res.json({ success: true })
 })
 
 // PATCH /api/spaces/:id/members/:userId
-router.patch('/:id/members/:userId', async (req, res) => {
+router.patch('/:id/members/:userId', validate(updateMemberSchema), async (req, res) => {
   const user = (req as any).user as User
   const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.id } } })
   if (!myMember || myMember.role !== 'owner') {
@@ -453,12 +546,7 @@ router.patch('/:id/members/:userId', async (req, res) => {
   const { role, permission } = req.body
   const data: any = {}
   if (role !== undefined) data.role = role
-  if (permission !== undefined) {
-    if (permission !== 'view' && permission !== 'edit') {
-      res.status(400).json({ error: 'Permission must be "view" or "edit"' }); return
-    }
-    data.permission = permission
-  }
+  if (permission !== undefined) data.permission = permission
 
   const updated = await prisma.spaceMember.update({
     where: { userId_spaceId: { userId: req.params.userId, spaceId: req.params.id } },
