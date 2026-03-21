@@ -167,3 +167,16 @@ model Notification {
   @@index([userId, spaceId])
   @@index([spaceId])
 }
+
+model Feedback {
+  id        String   @id @default(cuid())
+  type      String   // 'suggestion' | 'bug' | 'complaint'
+  message   String
+  userId    String
+  userName  String
+  userEmail String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([type])
+}

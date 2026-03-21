@@ -11,6 +11,7 @@ import spaceRoutes from './routes/spaces.js'
 import memoryRoutes from './routes/memories.js'
 import onThisDayRoutes from './routes/onThisDay.js'
 import notificationRoutes from './routes/notifications.js'
+import feedbackRoutes from './routes/feedback.js'
 import { sanitizeBody } from './middleware/sanitize.js'
 import { responseHelpers } from './middleware/response.js'
 import { trackError, getErrors, getErrorStats } from './errorTracker.js'
@@ -156,6 +157,7 @@ app.use('/api/spaces', wrapRouter(spaceRoutes))
 app.use('/api/spaces', wrapRouter(memoryRoutes))
 app.use('/api/on-this-day', wrapRouter(onThisDayRoutes))
 app.use('/api/notifications', wrapRouter(notificationRoutes))
+app.use('/api/feedback', wrapRouter(feedbackRoutes))
 
 // Admin error dashboard — protected by ADMIN_SECRET
 app.get('/api/admin/errors', (req, res) => {
