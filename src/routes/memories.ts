@@ -7,6 +7,7 @@ import { validate } from '../middleware/validate.js'
 import { User } from '../types.js'
 import { deleteCloudinaryImages, getRemovedUrls } from '../cloudinary.js'
 import { invalidateSpaceCache } from './spaces.js'
+import { notifySpaceMembers } from './notifications.js'
 
 const router = Router()
 router.use(authMiddleware)
@@ -64,27 +65,35 @@ const reactSchema = z.object({
   emoji: z.string().min(1, 'Emoji is required'),
 })
 
+// Accept both object and JSON string for style/canvas fields
+const jsonOrRecord = z.union([z.record(z.string(), z.unknown()), z.string().transform((s) => { try { return JSON.parse(s) } catch { return {} } })])
+
 const createSubstorySchema = z.object({
   date: z.string().optional(),
-  type: z.enum(['text', 'photo', 'photos', 'img-left', 'img-right', 'img-top', 'img-bottom', 'canvas']).optional(),
+  type: z.enum(['text', 'photo', 'photos', 'img-left', 'img-right', 'img-top', 'img-bottom', 'canvas', 'video']).optional(),
   title: z.string().optional(),
   content: z.string().optional(),
   caption: z.string().optional(),
   photos: z.array(z.string()).optional(),
-  textStyle: z.record(z.string(), z.unknown()).optional(),
-  titleStyle: z.record(z.string(), z.unknown()).optional(),
-  canvasData: z.record(z.string(), z.unknown()).optional(),
+  textStyle: jsonOrRecord.optional(),
+  titleStyle: jsonOrRecord.optional(),
+  canvasData: jsonOrRecord.optional(),
+  audioUrl: z.string().optional(),
+  videoUrl: z.string().optional(),
 })
 
 const updateSubstorySchema = z.object({
-  type: z.enum(['text', 'photo', 'photos', 'img-left', 'img-right', 'img-top', 'img-bottom', 'canvas']).optional(),
+  date: z.string().optional(),
+  type: z.enum(['text', 'photo', 'photos', 'img-left', 'img-right', 'img-top', 'img-bottom', 'canvas', 'video']).optional(),
   title: z.string().nullable().optional(),
   content: z.string().nullable().optional(),
   caption: z.string().nullable().optional(),
   photos: z.array(z.string()).optional(),
-  textStyle: z.record(z.string(), z.unknown()).nullable().optional(),
-  titleStyle: z.record(z.string(), z.unknown()).nullable().optional(),
-  canvasData: z.record(z.string(), z.unknown()).nullable().optional(),
+  textStyle: jsonOrRecord.nullable().optional(),
+  titleStyle: jsonOrRecord.nullable().optional(),
+  canvasData: jsonOrRecord.nullable().optional(),
+  audioUrl: z.string().nullable().optional(),
+  videoUrl: z.string().nullable().optional(),
 })
 
 // GET /api/spaces/:spaceId/memories/:memoryId/substories
@@ -93,13 +102,15 @@ router.get('/:spaceId/memories/:memoryId/substories', async (req, res) => {
   if (!(await validateMembership(req.params.spaceId, user.id))) {
     res.status(403).json({ error: 'Not a member of this space' }); return
   }
-  const substories = await prisma.subStory.findMany({ where: { memoryId: req.params.memoryId } })
+  const substories = await prisma.subStory.findMany({ where: { memoryId: req.params.memoryId }, orderBy: { date: 'asc' } })
   res.json(substories.map((s) => ({
     id: s.id, date: s.date, type: s.type, title: s.title, content: s.content,
     photos: s.photos ? JSON.parse(s.photos as string) : undefined, caption: s.caption,
     textStyle: s.textStyle ? (typeof s.textStyle === 'string' ? JSON.parse(s.textStyle) : s.textStyle) : undefined,
     titleStyle: s.titleStyle ? (typeof s.titleStyle === 'string' ? JSON.parse(s.titleStyle as string) : s.titleStyle) : undefined,
     canvasData: s.canvasData ? (typeof s.canvasData === 'string' ? JSON.parse(s.canvasData as string) : s.canvasData) : undefined,
+    audioUrl: s.audioUrl || undefined,
+    videoUrl: s.videoUrl || undefined,
   })))
 })
 
@@ -131,6 +142,9 @@ router.post('/:spaceId/memories', memoryWriteLimiter, validate(createMemorySchem
   })
   invalidateSpaceCache(undefined, req.params.spaceId)
 
+  // Notify space members about new memory
+  notifySpaceMembers(req.params.spaceId, user.id, 'new_memory', `${user.name} added a new memory: "${title.trim()}"`, memory.id).catch(() => {})
+
   res.status(201).json(formatMemory(memory))
 })
 
@@ -141,11 +155,15 @@ router.put('/:spaceId/memories/:memoryId', memoryWriteLimiter, validate(updateMe
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  // Only the creator or an owner/admin can edit a memory
+  // Only the creator, space owner, or an admin can edit a memory
   const existingForAuth = await prisma.memory.findUnique({ where: { id: req.params.memoryId }, select: { createdById: true } })
   if (existingForAuth && existingForAuth.createdById !== user.id) {
-    const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.spaceId } } })
-    if (myMember?.role !== 'owner' && myMember?.role !== 'admin') {
+    const [myMember, space] = await Promise.all([
+      prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.spaceId } } }),
+      prisma.space.findUnique({ where: { id: req.params.spaceId }, select: { createdById: true, type: true } })
+    ])
+    const isSpaceOwner = space?.createdById === user.id
+    if (!isSpaceOwner && myMember?.role !== 'owner' && myMember?.role !== 'admin') {
       res.status(403).json({ error: 'You can only edit your own memories' }); return
     }
   }
@@ -187,11 +205,15 @@ router.delete('/:spaceId/memories/:memoryId', memoryWriteLimiter, async (req, re
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  // Only the creator or an owner/admin can delete a memory
+  // Only the creator, space owner, or an admin can delete a memory
   const memForAuth = await prisma.memory.findUnique({ where: { id: req.params.memoryId }, select: { createdById: true } })
   if (memForAuth && memForAuth.createdById !== user.id) {
-    const myMember = await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.spaceId } } })
-    if (myMember?.role !== 'owner' && myMember?.role !== 'admin') {
+    const [myMember, space] = await Promise.all([
+      prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: user.id, spaceId: req.params.spaceId } } }),
+      prisma.space.findUnique({ where: { id: req.params.spaceId }, select: { createdById: true } })
+    ])
+    const isSpaceOwner = space?.createdById === user.id
+    if (!isSpaceOwner && myMember?.role !== 'owner' && myMember?.role !== 'admin') {
       res.status(403).json({ error: 'You can only delete your own memories' }); return
     }
   }
@@ -257,7 +279,7 @@ router.post('/:spaceId/memories/:memoryId/substories', memoryWriteLimiter, valid
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  const { date, type, title, content, caption, photos, textStyle, titleStyle, canvasData } = req.body
+  const { date, type, title, content, caption, photos, textStyle, titleStyle, canvasData, audioUrl, videoUrl } = req.body
 
   const substory = await prisma.subStory.create({
     data: {
@@ -266,14 +288,20 @@ router.post('/:spaceId/memories/:memoryId/substories', memoryWriteLimiter, valid
       type: type || 'text',
       title: title?.trim() || null,
       content: type === 'text' ? content?.trim() : null,
-      caption: type !== 'text' && type !== 'canvas' ? caption?.trim() : null,
-      photos: type !== 'text' && type !== 'canvas' ? JSON.stringify(photos || []) : undefined,
+      caption: type !== 'text' && type !== 'canvas' && type !== 'video' ? caption?.trim() : (type === 'video' ? caption?.trim() : null),
+      photos: type !== 'text' && type !== 'canvas' && type !== 'video' ? JSON.stringify(photos || []) : undefined,
       textStyle: textStyle ? JSON.stringify(textStyle) : undefined,
       titleStyle: titleStyle ? JSON.stringify(titleStyle) : undefined,
       canvasData: type === 'canvas' && canvasData ? JSON.stringify(canvasData) : undefined,
+      audioUrl: audioUrl || null,
+      videoUrl: type === 'video' ? (videoUrl || null) : null,
       memoryId: req.params.memoryId,
     },
   })
+
+  // Notify space members about new moment
+  const parentMemory = await prisma.memory.findUnique({ where: { id: req.params.memoryId }, select: { title: true } })
+  notifySpaceMembers(req.params.spaceId, user.id, 'new_moment', `${user.name} added a moment to "${parentMemory?.title || 'a memory'}"`, req.params.memoryId).catch(() => {})
 
   res.status(201).json({
     id: substory.id,
@@ -286,6 +314,8 @@ router.post('/:spaceId/memories/:memoryId/substories', memoryWriteLimiter, valid
     textStyle: substory.textStyle ? (typeof substory.textStyle === 'string' ? JSON.parse(substory.textStyle) : substory.textStyle) : undefined,
     titleStyle: substory.titleStyle ? (typeof substory.titleStyle === 'string' ? JSON.parse(substory.titleStyle as string) : substory.titleStyle) : undefined,
     canvasData: substory.canvasData ? (typeof substory.canvasData === 'string' ? JSON.parse(substory.canvasData as string) : substory.canvasData) : undefined,
+    audioUrl: substory.audioUrl || undefined,
+    videoUrl: substory.videoUrl || undefined,
   })
 })
 
@@ -296,21 +326,28 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', memoryWriteLim
     res.status(403).json({ error: 'You have view-only access to this space' }); return
   }
 
-  const { type, title, content, caption, photos, textStyle, titleStyle, canvasData } = req.body
+  const { date, type, title, content, caption, photos, textStyle, titleStyle, canvasData, audioUrl, videoUrl } = req.body
   const data: any = {}
+  if (date !== undefined) data.date = date
   if (type !== undefined) data.type = type
   if (title !== undefined) data.title = title?.trim() || null
   if (textStyle !== undefined) data.textStyle = textStyle ? JSON.stringify(textStyle) : null
   if (titleStyle !== undefined) data.titleStyle = titleStyle ? JSON.stringify(titleStyle) : null
   if (canvasData !== undefined) data.canvasData = canvasData ? JSON.stringify(canvasData) : null
+  if (audioUrl !== undefined) data.audioUrl = audioUrl || null
+  if (videoUrl !== undefined) data.videoUrl = videoUrl || null
   if (type === 'canvas') {
-    data.content = null; data.caption = null; data.photos = null
+    data.content = null; data.caption = null; data.photos = null; data.audioUrl = null; data.videoUrl = null
+  } else if (type === 'video') {
+    if (caption !== undefined) data.caption = caption?.trim() || null
+    data.content = null; data.photos = null; data.canvasData = null; data.audioUrl = null
+    if (videoUrl !== undefined) data.videoUrl = videoUrl || null
   } else if (type === 'text') {
     if (content !== undefined) data.content = content?.trim() || null
-    data.caption = null; data.photos = null; data.canvasData = null
+    data.caption = null; data.photos = null; data.canvasData = null; data.videoUrl = null
   } else if (type !== undefined) {
     if (caption !== undefined) data.caption = caption?.trim() || null
-    data.content = null; data.canvasData = null
+    data.content = null; data.canvasData = null; data.videoUrl = null
     if (photos !== undefined) data.photos = JSON.stringify(photos || [])
   } else {
     if (content !== undefined) data.content = content?.trim() || null
@@ -337,6 +374,8 @@ router.put('/:spaceId/memories/:memoryId/substories/:substoryId', memoryWriteLim
     textStyle: substory.textStyle ? (typeof substory.textStyle === 'string' ? JSON.parse(substory.textStyle) : substory.textStyle) : undefined,
     titleStyle: substory.titleStyle ? (typeof substory.titleStyle === 'string' ? JSON.parse(substory.titleStyle as string) : substory.titleStyle) : undefined,
     canvasData: substory.canvasData ? (typeof substory.canvasData === 'string' ? JSON.parse(substory.canvasData as string) : substory.canvasData) : undefined,
+    audioUrl: substory.audioUrl || undefined,
+    videoUrl: substory.videoUrl || undefined,
   })
 })
 

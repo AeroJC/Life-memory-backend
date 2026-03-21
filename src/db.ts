@@ -78,6 +78,8 @@ export function formatMemory(m: any) {
       textStyle: parseJson(s.textStyle, undefined),
       titleStyle: parseJson(s.titleStyle, undefined),
       canvasData: parseJson(s.canvasData, undefined),
+      audioUrl: s.audioUrl || undefined,
+      videoUrl: s.videoUrl || undefined,
     })) : undefined,
   }
 }
