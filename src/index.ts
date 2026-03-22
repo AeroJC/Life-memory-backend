@@ -14,7 +14,6 @@ import notificationRoutes from './routes/notifications.js'
 import feedbackRoutes from './routes/feedback.js'
 import sseRoutes from './routes/sse.js'
 import { sanitizeBody } from './middleware/sanitize.js'
-import { responseHelpers } from './middleware/response.js'
 import { trackError, getErrors, getErrorStats } from './errorTracker.js'
 
 // Validate required environment variables
@@ -66,9 +65,6 @@ app.use(express.json({ limit: '2mb' }))
 
 // Sanitize request bodies — skip rich text fields that contain intentional HTML
 app.use(sanitizeBody(new Set(['story', 'content', 'caption'])))
-
-// Attach consistent response helpers (res.apiSuccess / res.apiError)
-app.use(responseHelpers)
 
 // Request ID + logging
 app.use((req, res, next) => {

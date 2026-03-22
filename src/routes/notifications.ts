@@ -7,36 +7,6 @@ import { notificationBus } from '../notificationBus.js'
 const router = Router()
 router.use(authMiddleware)
 
-// GET /api/notifications — get user's notifications
-router.get('/', async (req, res) => {
-  const user = (req as any).user as User
-  const notifications = await prisma.notification.findMany({
-    where: { userId: user.id },
-    orderBy: { createdAt: 'desc' },
-    take: 50,
-    include: {
-      actor: { select: { id: true, name: true, avatar: true } },
-      space: { select: { id: true, title: true, coverEmoji: true, coverIcon: true } },
-    },
-  })
-  res.json(notifications)
-})
-
-// GET /api/notifications/unread-count — get unread counts grouped by space
-router.get('/unread-count', async (req, res) => {
-  const user = (req as any).user as User
-  const counts = await prisma.notification.groupBy({
-    by: ['spaceId'],
-    where: { userId: user.id, read: false },
-    _count: { id: true },
-  })
-  const total = counts.reduce((sum, c) => sum + c._count.id, 0)
-  res.json({
-    total,
-    bySpace: Object.fromEntries(counts.map(c => [c.spaceId, c._count.id])),
-  })
-})
-
 // GET /api/notifications/summary — consolidated notification data for polling
 router.get('/summary', async (req, res) => {
   const user = (req as any).user as User

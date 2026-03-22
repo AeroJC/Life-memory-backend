@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { prisma, formatSpace, formatSpaceWithMemories, formatMemory } from '../db.js'
+import { prisma, formatSpace, formatMemory } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { validate } from '../middleware/validate.js'
 import { User } from '../types.js'

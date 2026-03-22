@@ -45,14 +45,6 @@ export function formatSpace(space: any) {
   }
 }
 
-export function formatSpaceWithMemories(space: any) {
-  const base = formatSpace(space)
-  return {
-    ...base,
-    memories: (space.memories || []).map(formatMemory),
-  }
-}
-
 export function formatMemory(m: any) {
   return {
     id: m.id,

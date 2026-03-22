@@ -1,11 +1,16 @@
 export interface SubStory {
   id: string
   date: string
-  type: 'text' | 'photo' | 'photos'
+  type: 'text' | 'photo' | 'photos' | 'img-left' | 'img-right' | 'img-top' | 'img-bottom' | 'canvas' | 'video'
   title?: string
   content?: string
   photos?: string[]
   caption?: string
+  textStyle?: Record<string, unknown>
+  titleStyle?: Record<string, unknown>
+  canvasData?: Record<string, unknown>
+  audioUrl?: string
+  videoUrl?: string
 }
 
 export interface Memory {
@@ -34,6 +39,7 @@ export interface SpaceMember {
   name: string
   role: 'owner' | 'admin' | 'member'
   status: 'active' | 'pending'
+  permission?: 'view' | 'edit'
   joinedAt: string
 }
 
@@ -41,7 +47,12 @@ export interface MemorySpace {
   id: string
   title: string
   coverImage: string
+  coverImageOffsetX?: number
+  coverImageOffsetY?: number
+  coverImageScale?: number
   coverEmoji: string
+  coverIcon?: string
+  coverColor?: string
   memoryCount: number
   type: 'personal' | 'group'
   createdBy: string
@@ -58,4 +69,6 @@ export interface User {
   avatar: string
   email: string
   phone?: string
+  hasVaultCode?: boolean
+  hiddenSpaceIds?: string[]
 }
