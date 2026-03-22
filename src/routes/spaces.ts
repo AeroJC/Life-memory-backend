@@ -6,6 +6,7 @@ import { validate } from '../middleware/validate.js'
 import { User } from '../types.js'
 import { Resend } from 'resend'
 import { deleteCloudinaryImages } from '../cloudinary.js'
+import { notificationBus } from '../notificationBus.js'
 
 // In-memory response cache for read-heavy endpoints
 const responseCache = new Map<string, { data: any; expiresAt: number }>()
@@ -264,6 +265,19 @@ router.post('/join', validate(joinSchema), async (req, res) => {
     data: { userId: user.id, spaceId: space.id, requestedAt: new Date().toISOString().split('T')[0] },
   })
   invalidateSpaceCache(undefined, space.id)
+
+  // Notify space owner via SSE so they see the join request in real-time
+  notificationBus.emit(`notify:${space.createdById}`, {
+    type: 'join_request',
+    joinRequest: {
+      userId: user.id,
+      userName: user.name,
+      spaceId: space.id,
+      spaceTitle: space.title,
+      requestedAt: new Date().toISOString().split('T')[0],
+    },
+  })
+
   res.json({ success: true, spaceName: space.title })
 })
 

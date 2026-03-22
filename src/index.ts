@@ -12,6 +12,7 @@ import memoryRoutes from './routes/memories.js'
 import onThisDayRoutes from './routes/onThisDay.js'
 import notificationRoutes from './routes/notifications.js'
 import feedbackRoutes from './routes/feedback.js'
+import sseRoutes from './routes/sse.js'
 import { sanitizeBody } from './middleware/sanitize.js'
 import { responseHelpers } from './middleware/response.js'
 import { trackError, getErrors, getErrorStats } from './errorTracker.js'
@@ -58,6 +59,8 @@ app.use(cors({
   credentials: true,
 }))
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
+// Mount SSE before compression — compressed SSE breaks streaming
+app.use('/api/notifications', sseRoutes)
 app.use(compression())
 app.use(express.json({ limit: '2mb' }))
 

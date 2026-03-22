@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { prisma } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { User } from '../types.js'
+import { notificationBus } from '../notificationBus.js'
 
 const router = Router()
 router.use(authMiddleware)
@@ -167,4 +168,28 @@ export async function notifySpaceMembers(
       userId: m.userId,
     })),
   })
+
+  // Query back created notifications with actor/space includes for SSE
+  const createdNotifications = await prisma.notification.findMany({
+    where: {
+      spaceId,
+      actorId,
+      type,
+      userId: { in: members.map(m => m.userId) },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: members.length,
+    include: {
+      actor: { select: { id: true, name: true, avatar: true } },
+      space: { select: { id: true, title: true, coverEmoji: true, coverIcon: true } },
+    },
+  })
+
+  // Emit each notification to the bus so SSE clients receive it in real-time
+  for (const notif of createdNotifications) {
+    notificationBus.emit(`notify:${notif.userId}`, {
+      type: 'new_notification',
+      notification: notif,
+    })
+  }
 }
